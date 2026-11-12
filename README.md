@@ -72,6 +72,9 @@ quizzes you answer with a click.
 
 - **The Roamies panel:** click the menu bar or tray icon (on Linux, **Open Panel** in its menu) for what it's doing, what it remembers, and every setting.
 - **Safe by default:** file edits, commands and app control stay off until you turn them on, and risky steps always ask.
+- **Your Windows desktop:** opens apps and folders by the names you use ("File Explorer", "Settings", "Downloads",
+  anything in the Start menu), and arranges windows: bring one forward, minimize, maximize, close, snap to a side or
+  corner, tile several side by side, move one to your other screen.
 - **Local AI and private mode:** answer with a model on your own computer through [Ollama](https://ollama.com), and
   switch **Private mode** on so nothing you ask, show or open goes to the internet. It reads Word, Excel, PowerPoint
   and PDF files on the computer itself. [LOCAL-AI.md](LOCAL-AI.md) has the setup and what private mode does and doesn't cover.

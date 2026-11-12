@@ -12,6 +12,12 @@ export function describe(name, args = {}) {
   switch (name) {
     case 'take_screenshot': { const a = appOf(args.target); return a ? [`Looking at ${a}`, `Looked at ${a}`] : ['Looking at your screen', 'Looked at your screen']; }
     case 'list_windows': return ['Checking your windows', 'Checked your windows'];
+    case 'manage_window': {
+      if (args.action === 'list') return ['Checking your windows', 'Checked your windows'];
+      if (args.action === 'show_desktop') return ['Showing the desktop', 'Showed the desktop'];
+      const a = args.action === 'tile' ? '' : appOf(args.target);
+      return a ? [`Arranging ${a}`, `Arranged ${a}`] : ['Arranging your windows', 'Arranged your windows'];
+    }
     case 'read_window': { const a = appOf(args.target); return a ? [`Reading ${a}`, `Read ${a}`] : ['Reading a window', 'Read a window']; }
     case 'act_in_app': { const a = appOf(args.target); return a ? [`Working in ${a}`, `Worked in ${a}`] : ['Working in an app', 'Worked in an app']; }
     case 'draw': return (args.beats ?? []).length ? ['Drawing on your screen', 'Drew on your screen'] : ['Changing the drawing', 'Changed the drawing'];

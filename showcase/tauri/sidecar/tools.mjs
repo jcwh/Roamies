@@ -10,6 +10,7 @@ import { parseSipsSize, readProblem, rematch, sameBounds, shotFits, shotMap, sho
 import { ASK, BLOCK, checkDrawAction, checkOpen, checkRead, checkUrl, checkWrite, classifyCommand, isPrivateAddress, isRiskyClick, isYes, riskyKind } from './safety.mjs';
 import dns from 'node:dns/promises';
 import { isDocument, part, readDocument } from './docs.mjs';
+import { PLACES, START_APPS_COMMAND, WINDOW_SCRIPT, manageWindow, openByName, parseStartApps, winPath } from './windesk.mjs';
 import { CARDS, DrawArgs, LIMITS, checkDraw, createParts, createPhotos, describeParts, faviconFor, pickTextMatch, quizNote, resolveTargets } from './draw.mjs';
 import { plain } from './intro.mjs';
 import { linuxSession, seesPointer } from './platform.mjs';
@@ -34,6 +35,25 @@ export const run = (cmd, args, { onLine, ...opts } = {}) => new Promise((res) =>
 // failure says "Unable to find application", as macOS's open does.
 const WIN_OPEN = "try { if ($env:ROAMIES_OPEN_APP) { Start-Process -FilePath $env:ROAMIES_OPEN_APP -ArgumentList ('\"' + $env:ROAMIES_OPEN + '\"') -ErrorAction Stop } else { Start-Process -FilePath $env:ROAMIES_OPEN -ErrorAction Stop } } catch { [Console]::Error.WriteLine('Unable to find application: ' + $_.Exception.Message); exit 1 }";
 export const winOpen = (target, app = '') => run('powershell', ['-NoProfile', '-NonInteractive', '-Command', WIN_OPEN], { env: { ...process.env, ROAMIES_OPEN: target, ROAMIES_OPEN_APP: app } });
+// Windows: apps by the name people use. Start-Process alone only knows program file names ("explorer", "notepad"),
+// so "File Explorer", "Settings", "Word" or a Store app failed as "no app called …". The Start menu's own list
+// (read at most every 5 minutes) and a few fixed names (windesk.mjs) say what to start instead.
+let startAppsAt = 0, startAppsList = [];
+async function startApps() {
+  if (Date.now() - startAppsAt < 300_000 && startAppsList.length) return startAppsList;
+  const r = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', START_APPS_COMMAND], { timeout: 20_000 });
+  const list = r.err ? [] : parseStartApps(r.stdout);
+  if (list.length) { startAppsList = list; startAppsAt = Date.now(); }
+  return list.length ? list : startAppsList;
+}
+const openWinApp = (name) => openByName(name, { open: winOpen, apps: startApps });
+// Arranging windows on Windows (windesk.mjs): one PowerShell run per step list; the steps go in through the environment.
+const WINDOW_COMMAND = Buffer.from(WINDOW_SCRIPT, 'utf16le').toString('base64');
+async function winWindows(ops) {
+  const r = await run('powershell', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', WINDOW_COMMAND], { timeout: 30_000, env: { ...process.env, ROAMIES_WIN: JSON.stringify({ ops }) } });
+  const line = r.stdout.trim().split(/\r?\n/).filter((l) => l.trim().startsWith('{')).pop();
+  try { return JSON.parse(line); } catch { return { ok: false, error: (r.stderr.trim().split(/\r?\n/)[0] || r.err?.message || 'no answer from PowerShell').slice(0, 300) }; }
+}
 const THIS_COMPUTER = process.platform === 'darwin' ? 'this Mac' : 'this computer';
 const LINUX = process.platform === 'linux';
 // A Wayland session hides the pointer and clicks in other apps, so a drawing can't wait for them (platform.mjs).
@@ -132,7 +152,7 @@ async function launchApp(name, hands) {
   const n = String(name).trim();
   if (!['darwin', 'win32'].includes(process.platform) || !n || /[/\\:]/.test(n) || checkOpen(n, HOME).level === BLOCK) return false;
   // Opened only to act in it: in background mode (the default) it opens behind the user's app, not in front (macOS).
-  const r = process.platform === 'win32' ? await winOpen(n) : await run('open', [...(process.env.ROAMIES_BG !== '0' ? ['-g'] : []), '-a', n]);
+  const r = process.platform === 'win32' ? (await openWinApp(n)).r : await run('open', [...(process.env.ROAMIES_BG !== '0' ? ['-g'] : []), '-a', n]);
   if (r.err && /Unable to find application/i.test(r.stderr)) throw new Error(`There's no app called "${n}" on ${THIS_COMPUTER} (not installed, or it has another name). Don't look for it another way; say so and carry on with the rest.`);
   if (r.err) return false;
   for (let i = 0; i < 30; i++) {
@@ -917,31 +937,57 @@ A drawing stays until the user clears it or the window changes; your next drawin
         return clip(`${res.status} ${url}\n${text}`, 15_000);
       },
     },
+    // Windows: the desktop's windows themselves (windesk.mjs). Arranging is always allowed, like opening an app;
+    // closing one could lose unsaved work, so it needs the same switch as working inside apps.
+    ...(process.platform === 'win32' ? [{
+      name: 'manage_window',
+      description: "Arrange the windows on the desktop. action: 'focus' brings a window to the front, 'minimize', 'maximize', 'restore', 'close', 'place' puts it somewhere (where: left, right, top, bottom, a corner like top-left, center, full; screen 'next' moves it to the other monitor), 'tile' puts two to four windows side by side (targets), 'show_desktop' minimizes everything, 'list' shows what's open. target: 'front' (the window in use), an app or window name ('File Explorer', 'Chrome', 'Budget.xlsx'), or 'window:<id>'. To click or type inside a window use act_in_app; to start an app use open.",
+      parameters: z.object({
+        action: z.enum(['list', 'focus', 'minimize', 'maximize', 'restore', 'close', 'place', 'tile', 'show_desktop']),
+        target: z.string().optional(), where: z.enum(PLACES).optional(), screen: z.enum(['next']).optional(),
+        targets: z.array(z.string()).max(4).optional(),
+      }),
+      executionMode: 'sequential',
+      execute: async (args) => {
+        if (args.action === 'close' && !allowActions()) throw new Error(actionsOff);
+        if (args.action !== 'list') agentChangesScreen();
+        const said = await manageWindow(args, winWindows);
+        if (args.action !== 'list' && lastShot) lastShot.used = true;
+        return said;
+      },
+    }] : []),
     {
-      name: 'open', description: 'Open a website, a file or folder, or an app by name (e.g. "Safari", "https://skool.com", "~/Documents"). Links open in the default browser; set app to open one in a particular browser or app (e.g. app "Safari" when the user says "in Safari").',
+      name: 'open', description: process.platform === 'win32'
+        ? 'Open an app by name, a folder or file, or a website (e.g. "File Explorer", "Notepad", "Settings", "Downloads", "C:\\Users\\me\\Documents", "~/Desktop/notes.txt", "https://skool.com"). Apps are found by the name in the Start menu. Links open in the default browser; set app to open one in a particular browser or app (e.g. app "Chrome" when the user says "in Chrome").'
+        : 'Open a website, a file or folder, or an app by name (e.g. "Safari", "https://skool.com", "~/Documents"). Links open in the default browser; set app to open one in a particular browser or app (e.g. app "Safari" when the user says "in Safari").',
       parameters: z.object({ target: z.string(), app: z.string().optional() }),
       execute: async ({ target, app }) => {
         let t = String(target).trim();
         // A bare web address ("example.com", "www.bbc.co.uk/news") is a link, not an app name: it used to fail as
         // "Unable to find application named example.com" and cost a retry. App bundles ("Notes.app") stay apps.
         if (/^(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#]\S*)?$/i.test(t) && !/\.app$/i.test(t)) t = `https://${t}`;
+        // Windows paths as people and models write them: C:/Users/me, %USERPROFILE%\Documents.
+        if (process.platform === 'win32') t = winPath(t) ?? t;
         const isFile = /^[~/.]/.test(t) && await fs.stat(expand(t)).then((s) => s.isFile() && (s.mode & 0o111) !== 0, () => false);
         allowed(checkOpen(t, HOME, { executable: isFile }));
         agentChangesScreen();
         // mailto: has no //, but it's a link too (it used to be taken for an app name and fail).
         const isUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) || /^mailto:/i.test(t), isPath = /^[~/.]/.test(t) || /^[a-z]:\\/i.test(t);
-        let r;
+        let r, label = t;
         const inApp = app && ['darwin', 'win32'].includes(process.platform) && (isUrl || isPath) ? ['-a', String(app)] : [];
         if (process.platform === 'darwin') r = await run('open', isUrl || isPath ? [...inApp, isPath ? expand(t) : t] : ['-a', t]);
-        else if (process.platform === 'win32') r = await winOpen(isPath ? expand(t) : t, app && (isUrl || isPath) ? String(app) : '');
+        else if (process.platform === 'win32' && (isUrl || isPath)) r = await winOpen(isPath ? expand(t) : t, app ? String(app) : '');
+        else if (process.platform === 'win32') ({ r, label } = await openWinApp(t));
         // Linux: links and files go to xdg-open; a plain name is an app, found by its .desktop file.
         else if (isUrl || isPath) r = await launch('xdg-open', [isPath ? expand(t) : t]);
         else r = await openLinuxApp(t);
         // Not installed: say so plainly, so the model doesn't go hunting for it with scripts (which need a yes each).
+        // Windows: the Start menu's nearest names come with the answer, so one more try can use the real name.
+        if (r.err && /Unable to find application/i.test(r.stderr) && r.near?.length) throw new Error(`There's no app called "${t}" on ${THIS_COMPUTER}. Apps in the Start menu with a name like it: ${r.near.join(', ')}. Use one of those names if it's what ${userName} meant; otherwise tell them.`);
         if (r.err && /Unable to find application/i.test(r.stderr)) throw new Error(`There's no app called "${inApp.length ? app : t}" on ${THIS_COMPUTER} (not installed, or it has another name). Don't look for it another way; tell ${userName} and carry on with the rest.`);
         if (r.err) throw new Error(r.stderr.trim() || `Couldn't open ${t}.`);
         if (lastShot) lastShot.used = true;
-        return `Opened ${t}${inApp.length ? ` in ${app}` : ''}.`;
+        return `Opened ${label}${inApp.length ? ` in ${app}` : ''}.`;
       },
     },
     {

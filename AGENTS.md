@@ -40,7 +40,11 @@ A model on the same computer can answer instead of a cloud provider, and private
 (`sidecar/localai.mjs`: Ollama's models through gg-core's local-model support, the context check, and the guards on
 fetch, tools, links and commands; `sidekick.mjs` wires them, and `test/prompt.test.mjs` pins that wiring). Anything new
 that reaches the network must go through `fetch` (guarded) or be switched off while `config.privateMode` is set; the
-overlay loads card pictures itself, which is why `draw` is dropped in private mode. `sidecar/docs.mjs` lets `read_file`
+overlay loads card pictures itself, which is why `draw` is dropped in private mode. `sidecar/windesk.mjs` is the Windows
+desktop: apps and folders by spoken name for `open` (the Start menu's list, since Start-Process only knows program
+file names) and the `manage_window` tool, which reaches user32 through one PowerShell script (C# 5 only: Windows
+PowerShell compiles it; it can't be run off Windows, so `test/windesk.test.mjs` drives the logic against a stand-in
+desktop and checks the script's shape). `sidecar/docs.mjs` lets `read_file`
 open Word, PowerPoint, Excel and PDF files. User guide: `LOCAL-AI.md`.
 
 A fork can build the Windows installer with no signing keys: `.github/workflows/windows-installer.yml`.
