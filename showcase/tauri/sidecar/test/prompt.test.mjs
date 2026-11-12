@@ -57,7 +57,8 @@ console.log('prompt tests: passed');
 
 // This computer's own voice reads the words as written: its style swaps the voice cues for a line saying not to write any.
 assert.match(side, /const VOICE_STYLE = \(\) => `You talk out loud:/, 'the spoken style is worked out for the voice in use');
-assert.match(side, /\n\$\{speech\.local \? PLAIN_VOICE : ACTED_VOICE\}\nBefore anything slow/, 'a plain voice gets no cue instructions');
+// \r?\n: on Windows, Git checks these files out with CRLF line ends.
+assert.match(side, /\r?\n\$\{speech\.local \? PLAIN_VOICE : ACTED_VOICE\}\r?\nBefore anything slow/, 'a plain voice gets no cue instructions');
 assert.match(side, /const PLAIN_VOICE = `[^`]*never write cues in square brackets/, 'a plain voice is told not to write cues');
 assert.match(side, /const ACTED_VOICE = `Your voice carries feeling: start a sentence with a cue in square brackets/, "Fish Audio's voices keep their cues");
 assert.match(side, /const replyStyle = \(\) => \(VOICE_ON\(\) \? VOICE_STYLE\(\) : TEXT_STYLE\);/);
