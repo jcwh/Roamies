@@ -44,6 +44,12 @@ jobs:
         working-directory: showcase/tauri/sidecar
         run: npm test
 
+      # This computer's own voice, for real: the PowerShell helper lists Windows' voices and has one speak (to memory).
+      - name: Test the Windows voice for spoken replies
+        if: runner.os == 'Windows'
+        working-directory: showcase/tauri/sidecar
+        run: node test/localvoice.win.mjs
+
       - name: Check the workflows' inline node scripts
         if: runner.os == 'Linux'
         working-directory: ${{ github.workspace }}

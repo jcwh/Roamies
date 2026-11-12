@@ -5,6 +5,8 @@
 //   S2.1 Pro → free) with everything said so far, and one that works is kept from then on; if it fails after
 //   audio, the rest stays text only.
 // - Each reply has its own id, so audio from one that was stopped can never play over the next.
+// - A voice made on this computer (localvoice.mjs) stands in when it's the one picked, or when there's no Fish Audio
+//   key: no account, no model to choose and no ready-made beats (a beat is just said).
 // - Beats: when something slow starts (a web search, a page, the screen) and the model hasn't said anything,
 //   a short line ("One sec.", "On it." and 32 more, picked at random) plays so it's never silent. They're made once
 //   in the voice and kept, so they play instantly.
@@ -40,8 +42,13 @@ export function bundledBeats(dir = path.join(path.dirname(fileURLToPath(import.m
   };
 }
 
-export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, FishVoiceImpl = FishVoice, account = fishAccount, beatPhrases = BEATS, bundled = bundledBeats() }) {
+// local: { available() → whether this computer can speak by itself, make({ onAudio, onEnd, onError }) → a voice
+// shaped like FishVoice } or null.
+export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, FishVoiceImpl = FishVoice, account = fishAccount, beatPhrases = BEATS, bundled = bundledBeats(), local = null }) {
   let key = null, voice = DEFAULT_VOICE, pref = FISH_MODELS[0], model = pref, seq = 0, current = null, checking = null;
+  // Which voice speaks: 'auto' is Fish Audio when there's a key and this computer's voice when there isn't.
+  let engine = 'auto';
+  const useLocal = () => !!local?.available() && (engine === 'local' || (engine === 'auto' && !key));
   // The pick and the cheaper ones after it (FISH_MODELS runs from priciest to free).
   const chain = () => FISH_MODELS.slice(Math.max(0, FISH_MODELS.indexOf(pref)));
   let beats = new Map(), recent = [], warming = null; // phrase → [base64 PCM chunks], for the current key and voice
@@ -93,8 +100,47 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
     emit({ kind: 'speech', stop: true });
   }
 
+  /** A reply spoken by this computer's own voice. Same handle as start() gives. */
+  function startLocal() {
+    stopAll();
+    const id = `s${++seq}`, said = [], t0 = Date.now();
+    let ended = false, heard = false, done = false, beat = false;
+    const finish = (whole = false) => {
+      if (done) return;
+      done = true;
+      const chars = whole && heard ? said.join(' ').replace(/\[[^\]]*\]\s*/g, '').length : 0;
+      emit({ kind: 'speech', id, end: true, ...(chars ? { chars } : {}) });
+      if (current === me) current = null;
+    };
+    const v = local.make({
+      onAudio: (pcm, rate) => {
+        if (done) return;
+        if (!heard) { heard = true; log('speech_first_audio', { id, model: 'local', ms: Date.now() - t0 }); }
+        emit({ kind: 'speech', id, rate: rate || RATE, pcm: Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength).toString('base64') });
+      },
+      onEnd: () => finish(true),
+      onError: (err) => {
+        if (done) return;
+        log('speech_error', { id, model: 'local', heard, message: err.message });
+        if (!heard) onProblem(err.message);
+        finish();
+      },
+    }).open();
+    const me = {
+      id,
+      say(s) { if (done) return; said.push(s); v.say(s); },
+      beat() { if (done || beat || said.length || heard) return false; beat = true; me.say(pickBeat()); return true; },
+      end() { if (done || ended) return; ended = true; v.end(); },
+      abort() { if (done) return; done = true; v.abort(); if (current === me) current = null; },
+    };
+    log('speech_start', { id, model: 'local' });
+    current = me;
+    return me;
+  }
+
   /** A new reply's voice, its socket opening now. say(sentence) as they come, then end(). */
   function start() {
+    if (useLocal()) return startLocal();
     if (!key) return null;
     stopAll();
     const id = `s${++seq}`, said = [];
@@ -174,7 +220,13 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
     setVoice(v) { if ((v || DEFAULT_VOICE) !== voice) beats = new Map(); voice = v || DEFAULT_VOICE; if (key) warm(); },
     get ready() { return beats.size + beatPhrases.filter((p) => !beats.has(p) && shipped()?.has(p)).length; },
     get model() { return model; },
-    get on() { return !!key; },
+    // 'auto', 'fish' or 'local'. A reply already being spoken finishes in the voice it started in.
+    setEngine(e) { if (['auto', 'fish', 'local'].includes(e) && e !== engine) { engine = e; stopAll(); } },
+    get engine() { return engine; },
+    /** Whether the next reply is spoken by this computer's own voice. */
+    get local() { return useLocal(); },
+    get hasKey() { return !!key; },
+    get on() { return useLocal() || !!key; },
     check,
     start,
     stop: stopAll,

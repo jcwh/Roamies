@@ -485,20 +485,23 @@
   });
 
   // ---------------------------------------------------------------- step 3: how replies come
-  // Text only, or Voice + text (spoken with Fish Audio). Voice needs the user's own Fish Audio key: picking it
-  // opens the field, and the key is checked before voice turns on.
+  // Text only, or Voice + text. On a computer with a voice of its own (Windows, state.localVoice) voice turns on
+  // straight away, and a Fish Audio key is an extra for a voice that acts. Elsewhere voice needs the user's own
+  // Fish Audio key: picking it opens the field, and the key is checked before voice turns on.
   // Ken's Fish Audio affiliate link (sign-up lands on their site; keys are under Developers). It's disclosed in
   // the UI: the #fish-link button in index.html reads "Get a free key (affiliate link)".
   const FISH_URL = 'https://fish.audio/?fpr=o3gtlu';
   const replies = {
-    pick: null, saving: false, changing: false, // changing: replacing a key that's already saved
+    pick: null, saving: false, changing: false, // changing: the key field is open by choice (replacing a saved key, or adding one when this computer already speaks)
     mode: () => replies.pick ?? (state?.replies === 'voice' ? 'voice' : 'text'),
-    ready: () => replies.mode() === 'text' || (!!state?.fishKey && state.replies === 'voice'),
+    canSpeak: () => !!state?.fishKey || !!state?.localVoice,
+    ready: () => replies.mode() === 'text' || (replies.canSpeak() && state.replies === 'voice'),
     render() {
-      const mode = replies.mode(), on = state?.replies === 'voice' && state?.fishKey;
+      const mode = replies.mode(), on = state?.replies === 'voice' && replies.canSpeak();
+      const ownVoice = on && state?.voiceEngine === 'local';
       const CARDS = [
         ['text', 'Text only', 'Answers in my bubbles'],
-        ['voice', 'Voice + text', on ? 'Voice is on' : mode === 'voice' ? 'Needs a Fish Audio key' : 'Said out loud too'],
+        ['voice', 'Voice + text', ownVoice ? "On, in this computer's voice" : on ? 'Voice is on' : mode === 'voice' ? 'Needs a Fish Audio key' : 'Said out loud too'],
       ];
       $('replies').replaceChildren(...CARDS.map(([id, name, sub]) => {
         const checked = mode === id;
@@ -508,12 +511,13 @@
         b.onclick = () => replies.choose(id);
         return b;
       }));
-      const saved = !!state?.fishKey;
-      if (!saved || mode !== 'voice') replies.changing = false;
-      $('fish-form').hidden = mode !== 'voice' || (saved && !replies.changing);
-      $('fish-change').hidden = !saved || mode !== 'voice';
-      $('fish-change').textContent = replies.changing ? 'Keep my current key' : 'Change key';
-      $('fish-label').textContent = replies.changing ? 'New Fish Audio API key' : 'Fish Audio API key';
+      const saved = !!state?.fishKey, able = replies.canSpeak();
+      if (!able || mode !== 'voice') replies.changing = false;
+      $('fish-form').hidden = mode !== 'voice' || (able && !replies.changing);
+      $('fish-change').hidden = !able || mode !== 'voice';
+      $('fish-change').textContent = replies.changing ? (saved ? 'Keep my current key' : "Keep this computer's voice") : saved ? 'Change key' : 'Use a Fish Audio voice instead';
+      $('fish-label').textContent = replies.changing && saved ? 'New Fish Audio API key' : 'Fish Audio API key';
+      $('local-note').hidden = !ownVoice || replies.changing;
       $('fish-change').setAttribute('aria-expanded', String(replies.changing));
       $('fish-save').disabled = replies.saving;
       $('fish-save').textContent = replies.saving ? 'Checking…' : 'Save';
@@ -527,12 +531,12 @@
     choose(id) {
       if (replies.mode() === id && (id === 'text' || state?.replies === 'voice')) return;
       replies.pick = id; $('fish-error').hidden = true;
-      if (id === 'text' || state?.fishKey) {
+      if (id === 'text' || replies.canSpeak()) {
         if (state?.replies === id) quip(id === 'text' ? 'Text it is!' : 'Voice it is!');
         send({ type: 'ob_replies', mode: id });
       }
       replies.render();
-      if (id === 'voice' && !state?.fishKey) { $('fish-input').focus(); quip('Got a Fish Audio key?', 3); }
+      if (id === 'voice' && !replies.canSpeak()) { $('fish-input').focus(); quip('Got a Fish Audio key?', 3); }
     },
     onFish(msg) {
       replies.saving = false;
@@ -1259,8 +1263,10 @@
     const sys = win ? { type: 'perms', mic: q.get('blocked') === '1' ? 'denied' : 'granted', input: true } : { type: 'perms', mic: pre, speech: old ? pre : 'granted', speechNeeded: old, screen: pre, accessibility: pre };
     const st = {
       // &filesAsked=1: Allow was tapped for the folders in an earlier run. &replies=voice&fish=1: voice already on.
+      // &local=1: this computer has a voice of its own (Windows), so voice needs no key.
       kind: 'state', platform: q.get('platform') || 'darwin', step: +(q.get('step') || 0), sound: true, look: q.get('look') || 'classic', size: q.get('size') || 'default', voice: true, actions: false, login: true, filesAsked: q.get('filesAsked') === '1',
       replies: q.get('replies') === 'voice' ? 'voice' : 'text', fishKey: q.get('fish') === '1',
+      localVoice: q.get('local') === '1', voiceEngine: q.get('fish') === '1' ? 'fish' : 'local',
       bind: q.get('session') === 'wayland' ? Object.fromEntries(['summon', 'talk', 'ask', 'list', 'panel'].map((k) => [k, `'/home/sam/Apps/Roamies 0.1.33.AppImage' --${k}`])) : null,
       keys: q.get('platform') === 'win32' ? { talk: ['control', 'option'], write: ['control', 'shift'], summon: 'Control+Shift+KeyS', snap: 'Control+Shift+KeyA' } : { talk: ['control', 'option'], write: win ? ['control', 'shift'] : ['option', 'command'], summon: 'Control+Alt+KeyS', snap: 'Control+Alt+KeyA' }, connected: null,
       voiceModel: win ? { status: q.get('model') || 'missing', done: q.get('model') === 'downloading' ? 281601575 : 0, total: 670479942, error: q.get('model') === 'error' ? 'Download failed. Check your internet.' : null, size: '670 MB' } : null,
@@ -1314,7 +1320,7 @@
         // A key of "bad" is refused, like a wrong one.
         setTimeout(() => {
           if (m.key === 'bad') return window.__onboard?.({ kind: 'fish', ok: false, error: "That key didn't work. Copy it again from fish.audio and retry." });
-          Object.assign(st, { fishKey: true, replies: 'voice' }); window.__onboard?.({ kind: 'fish', ok: true }); window.__onboard?.({ ...st });
+          Object.assign(st, { fishKey: true, replies: 'voice', voiceEngine: 'fish' }); window.__onboard?.({ kind: 'fish', ok: true }); window.__onboard?.({ ...st });
         }, 900);
       } else if (m.type === 'set_keys') {
         // As the sidecar does: talk and type never share a pair, so picking the other one's pair swaps them.

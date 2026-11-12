@@ -31,7 +31,7 @@ voice, keeps track of what you said you'd do and nudges you when it's due.
 
 - **Talk, don't type.** Hold ⌃⌥ (Ctrl+Alt on Windows and Linux), say it, let go. On macOS and Windows, circle something with the cursor while you talk and it sees what you mean.
 - **Or type.** Tap ⌥⌘ (Ctrl+Shift on Windows and Linux) and a small text field opens beside your cursor. Type, press Enter.
-- **It talks back.** Spoken replies in its own voice, with real feeling, through [Fish Audio](https://fish.audio).
+- **It talks back.** Spoken replies in its own voice, with real feeling, through [Fish Audio](https://fish.audio). On Windows it can also speak with the PC's own voice: free, offline, no account.
 - **It remembers.** What you said you'd do, reminders down to the second, and what matters to you.
 - **It draws on your screen.** Rings the exact button to click, walks you through each step, and sketches answers beside what you're reading.
 - **It does the clicking.** Opens apps, sites and files, and on macOS and Windows clicks or types in other apps for you.
@@ -82,7 +82,7 @@ quizzes you answer with a click.
 | ---------------------- | -------------------------- | --------------------------- | ---------------------------------- |
 | Talk to it             | Yes, best on macOS 26+     | Yes, speech runs on your PC | Yes, speech runs on your PC        |
 | Circle while talking   | Yes                        | Yes                         | No                                 |
-| Spoken replies         | Yes, with a Fish Audio key | Yes, with a Fish Audio key  | Yes, with a Fish Audio key         |
+| Spoken replies         | Yes, with a Fish Audio key | Yes: the PC's own voice, or Fish Audio | Yes, with a Fish Audio key or a voice server |
 | Memory and reminders   | Yes                        | Yes                         | Yes                                |
 | Read windows and point | Yes                        | Yes                         | Points from screenshots only       |
 | Cards and diagrams     | Yes                        | Yes                         | Yes                                |
@@ -103,7 +103,13 @@ recognition (it needs a Windows language with text recognition, which most have)
 running as administrator, and it borrows your cursor for real clicks, keys and scrolling, giving it back when it's done.
 Windows also leaves Roamies out of every screen capture, so it won't show in your screenshots or screen shares.</sub>
 
-<sub>Spoken replies are billed to your own Fish Audio account; the panel shows what each voice model costs. Voice on
+<sub>Spoken replies without Fish Audio: on Windows, pick **Voice and text** and Roamies speaks with one of Windows' own
+voices (panel > Voice > **This PC**), with nothing to install and nothing sent anywhere. It's a plain voice: it reads the
+words without the acting the Fish Audio voices do. If you run a speech server on your computer that takes OpenAI's
+`/v1/audio/speech` request and answers with WAV (Chatterbox and Kokoro servers do), add its address under **Voice server**
+and Roamies speaks through that instead, on any system. Only addresses on your own computer are accepted.</sub>
+
+<sub>Spoken replies through Fish Audio are billed to your own Fish Audio account; the panel shows what each voice model costs. Voice on
 Windows and Linux uses [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
 ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), in the ONNX export by
 [istupakov](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx), run with

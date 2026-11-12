@@ -28,6 +28,12 @@ cd .. && ./build.sh dev                 # web files + sidecar + debug `cargo bui
 
 There is no linter configured yet.
 
+Spoken replies come from Fish Audio (`sidecar/fish.mjs`) or from the computer itself (`sidecar/localvoice.mjs`:
+Windows' own voices through one PowerShell process, or a speech server on the same computer); `speaker.mjs` picks.
+`node test/localvoice.win.mjs` tries the real Windows voice (CI runs it on the Windows runner).
+
+A fork can build the Windows installer with no signing keys: `.github/workflows/windows-installer.yml`.
+
 Releases: push a `v*` tag (or run `.github/workflows/release.yml` by hand). It builds a signed, notarized
 macOS DMG (Apple silicon and Intel), an unsigned Windows installer and the Linux beta (AppImage, .deb, .rpm, built on
 Ubuntu 24.04 because ONNX Runtime needs glibc 2.38) into a draft GitHub release. The Linux leg may fail without

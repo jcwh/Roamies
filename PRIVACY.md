@@ -22,6 +22,8 @@ key) receives:
 - screenshots or window text, when Roamies looks at your screen to answer
 
 **Fish Audio** receives the text of each reply to speak it, only if spoken replies are on. It uses your own key.
+With this computer's own voice picked instead (panel > Voice > This PC), replies are spoken by Windows itself, or by a
+speech server you run on your computer at an address on that computer, and their text is sent nowhere.
 
 **GitHub** is used to check for and download updates.
 

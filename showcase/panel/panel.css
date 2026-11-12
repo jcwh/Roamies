@@ -238,6 +238,11 @@ html, body { height: 100%; background: transparent; }
 .body select:focus-visible { outline: none; }
 .keyform { display: flex; gap: 6px; }
 .keyform[hidden] { display: none; }
+/* The voice server's two fields: the address on a row of its own, the voice name beside Save. */
+.keyform.stack { flex-wrap: wrap; }
+.keyform.stack .field:first-child { flex: 1 1 100%; }
+/* A dropdown at the end of a setting row (the Windows voice). */
+.setting .field.select { display: flex; max-width: 220px; }
 .keykinds { display: grid; gap: 6px; }
 .keykinds[hidden] { display: none; }
 .ok { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: var(--t-body); line-height: 1.25; white-space: nowrap; }

@@ -463,26 +463,73 @@
     }));
     return g;
   }
+  // The address of a speech server on this computer, and the voice to ask it for. Opens in place like a key field.
+  function serverForm() {
+    const lv = state.localVoice;
+    const url = el('input', { type: 'url', id: 'server-url', autocomplete: 'off', spellcheck: false, placeholder: 'http://127.0.0.1:8004/v1/audio/speech', 'aria-label': 'Voice server address', maxLength: 500, value: lv.server });
+    const voice = el('input', { type: 'text', id: 'server-voice', autocomplete: 'off', spellcheck: false, placeholder: 'Voice name (optional)', 'aria-label': 'Voice name on the server', maxLength: 200, value: lv.serverVoice });
+    const save = () => {
+      const v = url.value.trim();
+      if (!v) return url.focus();
+      send({ type: 'panel_localserver', url: v, voice: voice.value.trim() });
+      ui.key = null; render('addkey:server'); note('Trying the voice server…');
+    };
+    for (const input of [url, voice]) input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); else if (e.key === 'Escape') { e.stopPropagation(); ui.key = null; render('addkey:server'); } });
+    return el('div', { className: 'keyform stack', hidden: ui.key !== 'server' },
+      el('span', { className: 'px field' }, url), el('span', { className: 'px field' }, voice), btn('Save', save, { k: 'save:server' }));
+  }
   function voicePage() {
-    const v = state.voice;
+    const v = state.voice, lv = state.localVoice;
+    const local = state.voiceEngine === 'local';
+    const fishKeyRow = [
+      el('div', { className: 'setting' },
+        el('span', {}, 'Fish Audio key', el('small', { textContent: state.fishKey ? `Saved in ${where()}` : lv?.ok ? 'For a voice that acts: whispers, laughs, feeling' : lv ? 'For spoken replies (or add a voice server)' : 'Needed for spoken replies' })),
+        el('span', { className: 'row-btns' },
+          link(ui.key === 'fish' ? 'Cancel' : state.fishKey ? 'Change' : 'Add', () => { ui.key = ui.key === 'fish' ? null : 'fish'; render(ui.key ? 'key-fish' : 'addkey:fish'); }, { k: 'addkey:fish', aria: state.fishKey ? 'Change the Fish Audio key' : 'Add a Fish Audio key' }),
+          state.fishKey && ui.key !== 'fish' ? armed('Remove', 'Confirm', 'fishkey-remove', 'fishkey_remove', 'Remove the Fish Audio key') : null)),
+      keyForm('fish', 'Fish Audio', (key) => send({ type: 'panel_fishkey', key })),
+    ];
     return [
       group('Spoken replies', 'Hear me as well as read me.', null,
         picks('Replies', [['text', 'Text only'], ['voice', 'Voice and text']], state.replies, (x) => {
-          if (x === 'voice' && !state.fishKey) { ui.key = 'fish'; render('key-fish'); note('Add a Fish Audio key to hear me talk.'); return; }
+          // With no key, this computer's own voice speaks if it has one; otherwise a key comes first.
+          if (x === 'voice' && !state.fishKey && !lv?.ok) { ui.key = 'fish'; render('key-fish'); note('Add a Fish Audio key to hear me talk.'); return; }
           act(`replies:${x}`);
         }, 'replies'),
-        state.replies === 'voice' && state.fishModels?.length ? [
+        state.replies === 'voice' && lv ? [
+          el('p', { className: 'sub', textContent: 'Voice' }),
+          picks('Voice', [['local', lv.builtin ? 'This PC' : 'This computer'], ['fish', 'Fish Audio']], state.voiceEngine, (x) => {
+            if (x === 'fish' && !state.fishKey) { ui.key = 'fish'; render('key-fish'); note('Add a Fish Audio key to use that voice.'); return; }
+            if (x === 'local' && !lv.ok) { ui.key = 'server'; render('server-url'); note('Add the address of a voice server on this computer.'); return; }
+            act(`voiceengine:${x}`);
+          }, 'voiceengine', {
+            local: 'Free, works offline, and nothing leaves this computer. A plainer voice: it reads the words without acting them.',
+            fish: 'The character voices, with real feeling. Needs your own Fish Audio key and is billed to that account.',
+          }),
+          el('p', { className: 'why', textContent: local ? 'Free and offline. A plain voice, no acting.' : 'Character voices with feeling, through Fish Audio.' }),
+        ] : null,
+        state.replies === 'voice' && local && lv?.builtin && !lv.server && lv.voices.length ? el('div', { className: 'setting' },
+          el('span', { id: 'lbl-localvoice' }, 'Windows voice', el('small', { textContent: 'More can be added in Windows Settings > Time & language > Speech' })),
+          el('span', { className: 'px field select' },
+            el('select', { 'aria-labelledby': 'lbl-localvoice', 'data-k': 'localvoice', on: { change: (e) => act(`localvoice:${e.target.value}`) } },
+              el('option', { value: '', textContent: 'Automatic', selected: !lv.voice }),
+              lv.voices.map(([name, lang]) => el('option', { value: name, textContent: `${name.replace(/^Microsoft /, '').replace(/ Desktop$/, '')}${lang ? ` (${lang})` : ''}`, selected: name === lv.voice }))))) : null,
+        // Where this computer has no voice of its own (not Windows), the server row is always there: it's how to get one.
+        lv && ((state.replies === 'voice' && local) || !lv.ok) ? [
+          el('div', { className: 'setting' },
+            el('span', {}, 'Voice server', el('small', { textContent: lv.server ? lv.server.replace(/^https?:\/\//, '') : 'Optional: a speech server running on this computer' })),
+            el('span', { className: 'row-btns' },
+              link(ui.key === 'server' ? 'Cancel' : lv.server ? 'Change' : 'Add', () => { ui.key = ui.key === 'server' ? null : 'server'; render(ui.key ? 'server-url' : 'addkey:server'); }, { k: 'addkey:server', aria: lv.server ? 'Change the voice server' : 'Add a voice server' }),
+              lv.server && ui.key !== 'server' ? armed('Remove', 'Confirm', 'localserver-remove', 'localserver_remove', 'Remove the voice server') : null)),
+          serverForm(),
+        ] : null,
+        state.replies === 'voice' && !local && state.fishModels?.length ? [
           el('p', { className: 'sub', textContent: 'Voice model' }),
           picks('Voice model', state.fishModels.map((c) => [c.id, c.name]), state.fishModel, (x) => act(`fishmodel:${x}`), 'fishmodel',
             Object.fromEntries(state.fishModels.map((c) => [c.id, `${WHY_LONG[c.id] ?? ''} ${price(c)}`.trim()]))),
           el('p', { className: `why${state.fishFree ? ' late' : ''}`, textContent: state.fishFree ? "No credit left, so it's on Fish's free tier" : WHY[state.fishModel] ?? '' }),
         ] : null,
-        el('div', { className: 'setting' },
-          el('span', {}, 'Fish Audio key', el('small', { textContent: state.fishKey ? `Saved in ${where()}` : 'Needed for spoken replies' })),
-          el('span', { className: 'row-btns' },
-            link(ui.key === 'fish' ? 'Cancel' : state.fishKey ? 'Change' : 'Add', () => { ui.key = ui.key === 'fish' ? null : 'fish'; render(ui.key ? 'key-fish' : 'addkey:fish'); }, { k: 'addkey:fish', aria: state.fishKey ? 'Change the Fish Audio key' : 'Add a Fish Audio key' }),
-            state.fishKey && ui.key !== 'fish' ? armed('Remove', 'Confirm', 'fishkey-remove', 'fishkey_remove', 'Remove the Fish Audio key') : null)),
-        keyForm('fish', 'Fish Audio', (key) => send({ type: 'panel_fishkey', key }))),
+        fishKeyRow),
       v ? group('Talking to me', 'Speak instead of typing.', null,
         toggle('Voice control', v.download
           ? (v.download.status === 'downloading' ? `Downloading the voice model… ${v.download.pct}%` : v.download.status === 'error' ? 'The download failed' : `Needs a ${v.download.size} download`)
@@ -723,7 +770,11 @@
       commitments: [{ id: 'c1', text: 'Send the launch email', when: 'Fri 7 Nov, 10:00', overdue: false }, { id: 'c2', text: 'Book the dentist', when: 'Mon 3 Nov, 09:00', overdue: true }],
       name: 'Roamie', look: 'classic', looks: [['classic', 'Roamie'], ['jarvis', 'JARVIS'], ['anime', 'Anime Girl'], ['sarah', 'Sarah'], ['adrian', 'Adrian']],
       size: 'default', sizes: [['default', 'Default'], ['small', 'Small'], ['cursor', 'Cursor']],
-      replies: 'voice', fishKey: true, fishModel: 'drama-3', fishFree: false,
+      replies: 'voice', fishKey: !new URLSearchParams(location.search).has('nokey'), fishModel: 'drama-3', fishFree: false,
+      // ?nokey: no Fish Audio key, so this computer's own voice speaks. ?nolocal: a computer with no voice of its own.
+      voiceEngine: new URLSearchParams(location.search).has('nokey') ? 'local' : 'fish',
+      localVoice: new URLSearchParams(location.search).has('nolocal') ? { ok: false, builtin: false, voices: [], voice: '', server: '', serverVoice: '' }
+        : { ok: true, builtin: true, voices: [['Microsoft David Desktop', 'en-US'], ['Microsoft Zira Desktop', 'en-US'], ['Microsoft Hazel Desktop', 'en-GB']], voice: '', server: '', serverVoice: '' },
       fishModels: [{ id: 'drama-3', name: 'Drama 3', perM: 50, promo: { perM: 10, until: '2026-12-01T08:00:00Z' } }, { id: 's2.1-pro', name: 'S2.1 Pro', perM: 15 }],
       voice: { on: true, keys: '⌃⌥', ready: true, mac: true, mute: true, wakeWord: false, download: null }, askKeys: '⌥⌘',
       sound: true, actions: false, login: { on: true },
@@ -755,6 +806,12 @@
       if (args.msg?.type === 'copy_problem') setTimeout(() => window.__panel({ kind: 'copied', which: 'problem', ok: q.get('copy') !== 'fail' }), 150);
       const id = args.msg?.id ?? '';
       if (id.startsWith('size:')) { s.size = id.slice(5); setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
+      const again = () => setTimeout(() => window.__panel({ kind: 'state', state: s }), 120);
+      if (id.startsWith('replies:')) { s.replies = id.slice(8); again(); }
+      if (id.startsWith('voiceengine:')) { s.voiceEngine = id.slice(12); again(); }
+      if (id.startsWith('localvoice:')) { s.localVoice.voice = id.slice(11); again(); }
+      if (id === 'localserver_remove') { Object.assign(s.localVoice, { server: '', serverVoice: '' }); again(); }
+      if (args.msg?.type === 'panel_localserver') { Object.assign(s.localVoice, { ok: true, server: args.msg.url, serverVoice: args.msg.voice }); s.voiceEngine = s.fishKey ? s.voiceEngine : 'local'; again(); setTimeout(() => window.__panel({ kind: 'note', text: 'Voice server saved.' }), 300); }
       if (id.startsWith('look:')) { s.look = id.slice(5); s.name = s.looks.find(([v]) => v === s.look)?.[1] ?? s.name; setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
       return null;
     };

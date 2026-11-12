@@ -207,3 +207,87 @@ console.log('speaker beat variety: passed');
   }
 }
 console.log('bundled beats: passed');
+
+// ---- this computer's own voice (no Fish Audio key)
+{
+  const localMade = [];
+  class FakeLocal {
+    constructor(o) { Object.assign(this, o); this.said = []; this.ended = false; this.aborted = false; this.opened = false; localMade.push(this); }
+    open() { this.opened = true; return this; }
+    say(s) { this.said.push(s); }
+    end() { this.ended = true; }
+    abort() { this.aborted = true; }
+  }
+  const setupLocal = ({ available = true, acct = { ok: true, credit: 4.5 }, beatPhrases = [] } = {}) => {
+    made.length = 0; localMade.length = 0;
+    const out = [], problems = [], can = { on: available };
+    const sp = createSpeaker({ emit: (m) => out.push(m), onProblem: (p) => problems.push(p), FishVoiceImpl: FakeVoice, account: async () => acct, beatPhrases, bundled: () => null,
+      local: { available: () => can.on, make: (on) => new FakeLocal(on) } });
+    return { sp, out, problems, can };
+  };
+  { // No key, and the computer can speak: replies are spoken by it, at the rate its audio comes in.
+    const { sp, out } = setupLocal();
+    assert.equal(sp.on, true); assert.equal(sp.hasKey, false); assert.equal(sp.local, true); assert.equal(sp.engine, 'auto');
+    const r = sp.start();
+    assert.ok(r); assert.equal(made.length, 0, 'Fish Audio is not asked'); assert.ok(localMade[0].opened);
+    r.say('[warm] Hi there.'); r.say('Bye.'); r.end();
+    const v = localMade[0];
+    assert.deepEqual(v.said, ['[warm] Hi there.', 'Bye.']); assert.ok(v.ended);
+    v.onAudio(new Uint8Array([1, 0, 2, 0]), 22050);
+    assert.deepEqual(out.at(-1), { kind: 'speech', id: r.id, rate: 22050, pcm: Buffer.from([1, 0, 2, 0]).toString('base64') });
+    v.onEnd();
+    assert.deepEqual(out.at(-1), { kind: 'speech', id: r.id, end: true, chars: 14 }, 'how much it said, without the cue');
+  }
+  { // No key and no voice of its own: no voice at all, as before.
+    const { sp, can } = setupLocal({ available: false });
+    assert.equal(sp.on, false); assert.equal(sp.local, false); assert.equal(sp.start(), null);
+    can.on = true; // a voice server's address was added
+    assert.equal(sp.on, true); assert.ok(sp.start());
+  }
+  { // A key: Fish Audio speaks unless this computer's voice is picked; picking Fish Audio with no key is silent.
+    const { sp } = setupLocal();
+    sp.setKey('k'); await tick();
+    assert.equal(sp.local, false); assert.equal(sp.hasKey, true);
+    sp.start(); assert.equal(made.length, 1); assert.equal(localMade.length, 0);
+    sp.setEngine('local');
+    assert.equal(sp.local, true);
+    sp.start(); assert.equal(localMade.length, 1); assert.ok(made[0].aborted, 'the Fish Audio reply was stopped');
+    sp.setEngine('fish');
+    sp.start(); assert.equal(made.length, 2);
+    sp.setKey(null);
+    assert.equal(sp.on, false); assert.equal(sp.start(), null, "Fish Audio was asked for, and there's no key");
+    sp.setEngine('auto');
+    assert.equal(sp.local, true); assert.ok(sp.start());
+    sp.setEngine('nonsense'); assert.equal(sp.engine, 'auto');
+  }
+  { // A new reply stops the last one; stop() ends it; audio from a stopped reply never goes out.
+    const { sp, out } = setupLocal();
+    const a = sp.start(), b = sp.start();
+    assert.ok(localMade[0].aborted); assert.notEqual(a.id, b.id);
+    const n = out.length;
+    localMade[0].onAudio(new Uint8Array([1, 0]), 22050); localMade[0].onEnd();
+    assert.equal(out.length, n, 'nothing from the stopped reply');
+    sp.stop();
+    assert.ok(localMade[1].aborted); assert.deepEqual(out.at(-1), { kind: 'speech', stop: true });
+  }
+  { // A beat is simply said (none are recorded for this voice), once, and only before anything else.
+    const { sp } = setupLocal({ beatPhrases: ['One sec.'] });
+    const r = sp.start();
+    assert.equal(r.beat(), true); assert.deepEqual(localMade[0].said, ['One sec.']);
+    assert.equal(r.beat(), false);
+    const r2 = sp.start(); r2.say('Already talking.');
+    assert.equal(r2.beat(), false);
+  }
+  { // It fails before any audio: one problem report, and the reply ends (the text stays). After audio: no report.
+    const { sp, out, problems } = setupLocal();
+    const r = sp.start(); r.say('Hi.');
+    localMade[0].onError(Object.assign(new Error("Couldn't reach the voice server. Is it running?"), { heard: false }));
+    assert.deepEqual(problems, ["Couldn't reach the voice server. Is it running?"]);
+    assert.deepEqual(out.at(-1), { kind: 'speech', id: r.id, end: true });
+    const r2 = sp.start(); r2.say('Hi.');
+    localMade[1].onAudio(new Uint8Array([1, 0]), 24000);
+    localMade[1].onError(Object.assign(new Error('gone'), { heard: true }));
+    assert.equal(problems.length, 1); assert.deepEqual(out.at(-1), { kind: 'speech', id: r2.id, end: true });
+  }
+  console.log('local voice in the speaker: passed');
+}

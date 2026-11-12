@@ -54,3 +54,11 @@ assert.match(side, /m\.type === 'quiz_done'\) onQuizDone\(/, 'the overlay report
 assert.match(side, /const quiz = takeQuizNote\(\);\s*const stamped = `\[\$\{stampNow\(\)\}\] \$\{text\}\$\{quiz \? `\\n\(\$\{quiz\}\)` : ''\}`;/, 'the score rides along with their next message');
 assert.match(side, /newSession\(config\.provider, config\.model\); liveBlocks\.clear\(\); agent = null; pendingFold = null; lastInput = null; quizDone = null;/, 'a new conversation drops it');
 console.log('prompt tests: passed');
+
+// This computer's own voice reads the words as written: its style swaps the voice cues for a line saying not to write any.
+assert.match(side, /const VOICE_STYLE = \(\) => `You talk out loud:/, 'the spoken style is worked out for the voice in use');
+assert.match(side, /\n\$\{speech\.local \? PLAIN_VOICE : ACTED_VOICE\}\nBefore anything slow/, 'a plain voice gets no cue instructions');
+assert.match(side, /const PLAIN_VOICE = `[^`]*never write cues in square brackets/, 'a plain voice is told not to write cues');
+assert.match(side, /const ACTED_VOICE = `Your voice carries feeling: start a sentence with a cue in square brackets/, "Fish Audio's voices keep their cues");
+assert.match(side, /const replyStyle = \(\) => \(VOICE_ON\(\) \? VOICE_STYLE\(\) : TEXT_STYLE\);/);
+console.log('prompt: the plain voice has its own style');
