@@ -18,3 +18,4 @@ node_modules/
 *.tmp
 .vscode/
 .idea/
+__pycache__/

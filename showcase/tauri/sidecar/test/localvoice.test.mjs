@@ -3,7 +3,7 @@ import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { createSpeaker } from '../speaker.mjs';
 import { SpeechText } from '../speech.mjs';
-import { LocalVoice, SAPI_RATE, SAPI_SCRIPT, createSapi, createServerVoice, hasBuiltinVoice, localAddress, parseWav, plain } from '../localvoice.mjs';
+import { LocalVoice, SAPI_RATE, SAPI_SCRIPT, createSapi, createServerVoice, hasBuiltinVoice, localAddress, parseWav, plain, voiceForLook } from '../localvoice.mjs';
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
@@ -11,6 +11,17 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
   assert.equal(hasBuiltinVoice('win32'), true);
   assert.equal(hasBuiltinVoice('darwin'), false);
   assert.equal(hasBuiltinVoice('linux'), false);
+}
+
+{ // JARVIS takes a British man's voice when Windows has one, else leaves it to the gender hint; other looks never pick by name.
+  const david = { name: 'Microsoft David Desktop', gender: 'Male', lang: 'en-US' }, zira = { name: 'Microsoft Zira Desktop', gender: 'Female', lang: 'en-US' };
+  const hazel = { name: 'Microsoft Hazel Desktop', gender: 'Female', lang: 'en-GB' }, george = { name: 'Microsoft George', gender: 'Male', lang: 'en-GB' };
+  const james = { name: 'Microsoft James', gender: 'Male', lang: 'en-AU' };
+  assert.equal(voiceForLook('jarvis', [david, zira, hazel, george]), 'Microsoft George');
+  assert.equal(voiceForLook('jarvis', [david, james, hazel]), 'Microsoft James', 'no British man: another Commonwealth one before an American');
+  assert.equal(voiceForLook('jarvis', [david, zira, hazel]), '', "a British woman's voice isn't it: the gender hint picks a man's");
+  assert.equal(voiceForLook('jarvis', []), ''); assert.equal(voiceForLook('jarvis'), '');
+  assert.equal(voiceForLook('sarah', [david, zira, hazel, george]), ''); assert.equal(voiceForLook('classic', [george]), '');
 }
 
 { // A plain voice would read the Fish Audio cues out loud: they're dropped, the words stay.

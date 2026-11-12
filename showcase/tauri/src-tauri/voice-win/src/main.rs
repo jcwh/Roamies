@@ -3,6 +3,8 @@
 // permission), records the default microphone and
 // transcribes on this PC with NVIDIA Parakeet TDT 0.6B v3 (int8 ONNX via parakeet-rs). Parakeet isn't a
 // streaming model, so live text comes from re-reading the take about once a second.
+// When the settings name a speech server on this computer (remote.rs), the finished take is read by that instead,
+// for accents Parakeet mishears; Parakeet still does the live text, and the whole job if the server is off.
 // Hold the chord = push-to-talk (release sends). Quick tap = hands-free (ends on a pause or another tap).
 // While the chord is held, moving the cursor round something circles it (ink.rs); the circled area goes out with
 // what was said, as on macOS (Windows only). On Wayland no app can watch the keyboard, so there {"cmd":"toggle"}
@@ -12,12 +14,13 @@
 // roamies-voice --model <dir> [--chord control,option]   normal use (Roamies starts it)
 // roamies-voice --perms                                   prints {"type":"perms","mic":…}
 // roamies-voice --devices                                 prints {"type":"devices",…}: every mic, the default, formats
-// roamies-voice --model <dir> --transcribe <wav>          dev: transcribe a file and exit
+// roamies-voice --model <dir> --transcribe <wav>          dev: transcribe a file and exit (also through the speech server, if set)
 // roamies-voice --model <dir> --test-audio <wav>          dev: a file stands in for the mic ({"cmd":"listen"} starts)
 
 mod audio;
 mod ink;
 mod keys;
+mod remote;
 
 use audio::{MicError, Sink, Source};
 use parakeet_rs::{ExecutionConfig, ParakeetTDT, Transcriber};
@@ -112,7 +115,12 @@ fn spawn_engine(dir: PathBuf, tx: Sender<Ev>) -> (Sender<Job>, thread::JoinHandl
                 Some(i) => jobs.swap_remove(i),
                 None => jobs.pop().expect("at least one job"),
             };
-            let text = transcribe(&mut asr, job.audio);
+            // The finished take goes to the speech server when one is set; Parakeet reads it otherwise, or if that fails.
+            let served = if job.last { remote::transcribe(&dir, &job.audio) } else { None };
+            let text = match served {
+                Some(text) => text,
+                None => transcribe(&mut asr, job.audio),
+            };
             if tx.send(Ev::Text { take: job.take, text, last: job.last }).is_err() {
                 return;
             }
@@ -600,7 +608,9 @@ fn main() {
         let (samples, rate) = audio::read_wav(Path::new(&wav)).unwrap_or_else(|e| panic!("{wav}: {e}"));
         let t0 = Instant::now();
         let text = transcribe(&mut asr, samples.clone());
-        emit(json!({ "text": text, "seconds": (t0.elapsed().as_secs_f64() * 100.0).round() / 100.0, "audio": samples.len() as f64 / rate as f64 }));
+        // With a speech server set, what it makes of the same file is shown beside Parakeet's.
+        let served = remote::transcribe(&dir, &samples);
+        emit(json!({ "text": text, "server": served, "seconds": (t0.elapsed().as_secs_f64() * 100.0).round() / 100.0, "audio": samples.len() as f64 / rate as f64 }));
         return;
     }
 

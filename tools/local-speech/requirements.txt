@@ -1,0 +1,5 @@
+# Install PyTorch first, the build for your graphics card: https://pytorch.org/get-started/locally/
+transformers>=4.44
+numpy
+# Optional, for the voice (/v1/audio/speech). Leave it out and the server only listens.
+kokoro>=0.9.2

@@ -32,6 +32,10 @@ Spoken replies come from Fish Audio (`sidecar/fish.mjs`) or from the computer it
 Windows' own voices through one PowerShell process, or a speech server on the same computer); `speaker.mjs` picks.
 `node test/localvoice.win.mjs` tries the real Windows voice (CI runs it on the Windows runner).
 
+Listening can go to a speech-to-text server on the same computer (`voice-win/src/remote.rs`, std only, so
+`rustc --test remote.rs` runs its tests anywhere; the sidecar's side is `ears.mjs`): the finished take is sent there and
+Parakeet reads it if that fails. `tools/local-speech` is such a server (Python; `ROAMIES_SPEECH_FAKE=1` runs it without models).
+
 A fork can build the Windows installer with no signing keys: `.github/workflows/windows-installer.yml`.
 
 Releases: push a `v*` tag (or run `.github/workflows/release.yml` by hand). It builds a signed, notarized

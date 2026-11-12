@@ -478,6 +478,18 @@
     return el('div', { className: 'keyform stack', hidden: ui.key !== 'server' },
       el('span', { className: 'px field' }, url), el('span', { className: 'px field' }, voice), btn('Save', save, { k: 'save:server' }));
   }
+  // The address of a speech-to-text server on this computer (it reads what was said instead of the built-in model).
+  function speechForm() {
+    const url = el('input', { type: 'url', id: 'speech-url', autocomplete: 'off', spellcheck: false, placeholder: 'http://127.0.0.1:8123/v1/audio/transcriptions', 'aria-label': 'Speech server address', maxLength: 500, value: state.voice.server });
+    const save = () => {
+      const v = url.value.trim();
+      if (!v) return url.focus();
+      send({ type: 'panel_speechserver', url: v });
+      ui.key = null; render('addkey:speech'); note('Trying the speech server…');
+    };
+    url.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); else if (e.key === 'Escape') { e.stopPropagation(); ui.key = null; render('addkey:speech'); } });
+    return el('div', { className: 'keyform', hidden: ui.key !== 'speech' }, el('span', { className: 'px field' }, url), btn('Save', save, { k: 'save:speech' }));
+  }
   function voicePage() {
     const v = state.voice, lv = state.localVoice;
     const local = state.voiceEngine === 'local';
@@ -535,7 +547,16 @@
           ? (v.download.status === 'downloading' ? `Downloading the voice model… ${v.download.pct}%` : v.download.status === 'error' ? 'The download failed' : `Needs a ${v.download.size} download`)
           : v.keys ? `Hold ${v.keys} to talk` : 'Press your talk shortcut to talk', v.on, () => act('voice'), 'voice'),
         v.download && v.download.status !== 'downloading' ? el('div', { className: 'links' }, link(v.download.status === 'error' ? 'Retry the download' : `Download (${v.download.size})`, () => act('voicedl'), { k: 'voicedl' })) : null,
-        v.mac ? toggle('Mute Mac while talking', 'Other sounds go quiet while you talk', v.mute, () => act('mutetalk'), 'mutetalk') : null) : null,
+        v.mac ? toggle('Mute Mac while talking', 'Other sounds go quiet while you talk', v.mute, () => act('mutetalk'), 'mutetalk') : null,
+        // Windows and Linux: a speech server on this computer can do the listening, for accents the built-in model mishears.
+        v.server != null ? [
+          el('div', { className: 'setting' },
+            el('span', {}, 'Speech server', el('small', { textContent: v.server ? v.server.replace(/^https?:\/\//, '') : 'Optional: for accents the built-in model mishears' })),
+            el('span', { className: 'row-btns' },
+              link(ui.key === 'speech' ? 'Cancel' : v.server ? 'Change' : 'Add', () => { ui.key = ui.key === 'speech' ? null : 'speech'; render(ui.key ? 'speech-url' : 'addkey:speech'); }, { k: 'addkey:speech', aria: v.server ? 'Change the speech server' : 'Add a speech server' }),
+              v.server && ui.key !== 'speech' ? armed('Remove', 'Confirm', 'speechserver-remove', 'speechserver_remove', 'Remove the speech server') : null)),
+          speechForm(),
+        ] : null) : null,
     ];
   }
   // Wayland: the commands to bind to keys in the desktop's settings (no app may hold its own shortcuts there).
@@ -776,7 +797,9 @@
       localVoice: new URLSearchParams(location.search).has('nolocal') ? { ok: false, builtin: false, voices: [], voice: '', server: '', serverVoice: '' }
         : { ok: true, builtin: true, voices: [['Microsoft David Desktop', 'en-US'], ['Microsoft Zira Desktop', 'en-US'], ['Microsoft Hazel Desktop', 'en-GB']], voice: '', server: '', serverVoice: '' },
       fishModels: [{ id: 'drama-3', name: 'Drama 3', perM: 50, promo: { perM: 10, until: '2026-12-01T08:00:00Z' } }, { id: 's2.1-pro', name: 'S2.1 Pro', perM: 15 }],
-      voice: { on: true, keys: '⌃⌥', ready: true, mac: true, mute: true, wakeWord: false, download: null }, askKeys: '⌥⌘',
+      // ?win: the Voice page as on Windows (a speech server can be set, no Mac-only rows).
+      voice: new URLSearchParams(location.search).has('win') ? { on: true, keys: 'Ctrl+Alt', ready: true, mac: false, mute: true, wakeWord: false, download: null, server: '' }
+        : { on: true, keys: '⌃⌥', ready: true, mac: true, mute: true, wakeWord: false, download: null, server: null }, askKeys: '⌥⌘',
       sound: true, actions: false, login: { on: true },
       update: { available: new URLSearchParams(location.search).has('update') && new URLSearchParams(location.search).get('update') !== 'failed' ? '0.9.1' : null, installing: false, checking: false, result: null },
       intro: false,
@@ -810,6 +833,8 @@
       if (id.startsWith('replies:')) { s.replies = id.slice(8); again(); }
       if (id.startsWith('voiceengine:')) { s.voiceEngine = id.slice(12); again(); }
       if (id.startsWith('localvoice:')) { s.localVoice.voice = id.slice(11); again(); }
+      if (id === 'speechserver_remove') { s.voice.server = ''; again(); }
+      if (args.msg?.type === 'panel_speechserver') { s.voice.server = args.msg.url; again(); setTimeout(() => window.__panel({ kind: 'note', text: 'Speech server saved. It reads what you say from now on.' }), 300); }
       if (id === 'localserver_remove') { Object.assign(s.localVoice, { server: '', serverVoice: '' }); again(); }
       if (args.msg?.type === 'panel_localserver') { Object.assign(s.localVoice, { ok: true, server: args.msg.url, serverVoice: args.msg.voice }); s.voiceEngine = s.fishKey ? s.voiceEngine : 'local'; again(); setTimeout(() => window.__panel({ kind: 'note', text: 'Voice server saved.' }), 300); }
       if (id.startsWith('look:')) { s.look = id.slice(5); s.name = s.looks.find(([v]) => v === s.look)?.[1] ?? s.name; setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }

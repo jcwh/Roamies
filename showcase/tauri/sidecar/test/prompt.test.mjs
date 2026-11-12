@@ -63,3 +63,14 @@ assert.match(side, /const PLAIN_VOICE = `[^`]*never write cues in square bracket
 assert.match(side, /const ACTED_VOICE = `Your voice carries feeling: start a sentence with a cue in square brackets/, "Fish Audio's voices keep their cues");
 assert.match(side, /const replyStyle = \(\) => \(VOICE_ON\(\) \? VOICE_STYLE\(\) : TEXT_STYLE\);/);
 console.log('prompt: the plain voice has its own style');
+
+// JARVIS has its own manner (a composed British butler's), in its own words; the other looks keep the cheeky one.
+assert.match(side, /jarvis: \(name\) => `Personality: composed, courteous and quietly witty, in the manner of a seasoned British butler/, 'JARVIS has a manner of its own');
+assert.match(side, /never quote lines from films/, 'the manner is its own, not film dialogue');
+assert.match(side, /default: \(name\) => `Personality: warm, funny, a little cheeky\./, 'the other looks keep theirs');
+assert.match(side, /\$\{\(MANNER\[config\.look\] \?\? MANNER\.default\)\(userName\)\}/, 'the prompt uses the look\'s manner');
+// In Singapore the model is told what the speech model tends to mishear, and to answer in its normal voice.
+assert.match(side, /act on what they most likely meant\. \$\{SINGAPORE\(\) \? SINGLISH : ''\}`/, 'the transcript line carries the Singapore English note');
+assert.match(side, /const SINGLISH = `They're in Singapore and speak Singapore English, which the speech model often mishears/);
+assert.match(side, /const SINGAPORE = \(\) => \(typeof config\.singlish === 'boolean' \? config\.singlish : TZ === 'Asia\/Singapore'/, 'on by time zone or region, or by the setting');
+console.log('prompt: JARVIS manner and the Singapore English note');

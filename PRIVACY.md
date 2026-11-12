@@ -24,6 +24,8 @@ key) receives:
 **Fish Audio** receives the text of each reply to speak it, only if spoken replies are on. It uses your own key.
 With this computer's own voice picked instead (panel > Voice > This PC), replies are spoken by Windows itself, or by a
 speech server you run on your computer at an address on that computer, and their text is sent nowhere.
+The same goes for listening: with a speech server set (panel > Voice > Speech server), what you say is sent as audio to
+that address on your own computer and nowhere else; without one it is read by the model inside Roamies.
 
 **GitHub** is used to check for and download updates.
 

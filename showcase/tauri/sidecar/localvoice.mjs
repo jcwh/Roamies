@@ -10,6 +10,14 @@ import { spawn } from 'node:child_process';
 /** Windows has voices built in; elsewhere local voice needs a speech server's address. */
 export const hasBuiltinVoice = (platform) => platform === 'win32';
 
+// The Windows voice for the look when none was picked by name: for JARVIS a British man's if one is installed,
+// else by gender (the helper picks). voices: [{ name, gender, lang }].
+export const voiceForLook = (look, voices = []) => {
+  if (look !== 'jarvis') return '';
+  const men = voices.filter((v) => /^male$/i.test(v.gender));
+  return (men.find((v) => /^en-GB$/i.test(v.lang)) ?? men.find((v) => /^en-(AU|IE|NZ|ZA|IN)$/i.test(v.lang)))?.name ?? '';
+};
+
 export const SAPI_RATE = 22050;
 // Windows PowerShell 5.1 (on every Windows 10 and 11). Requests come in as ASCII JSON (\uXXXX for the rest), so the
 // console's code page never matters; replies are JSON lines with the audio in base64.
@@ -155,15 +163,16 @@ export function createSapi({ spawnImpl = spawn, command = 'powershell.exe', star
   };
 }
 
-/** Only this computer: localhost, 127.x.x.x or [::1], over http or https. Returns the cleaned address, or null. */
-export function localAddress(input) {
+/** Only this computer: localhost, 127.x.x.x or [::1], over http or https. Returns the cleaned address, or null.
+ *  path: what a bare host gets (the speech-to-text server in ears.mjs has its own). */
+export function localAddress(input, path = '/v1/audio/speech') {
   let u;
   try { u = new URL(String(input ?? '').trim()); } catch { return null; }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
   if (u.username || u.password) return null;
   const host = u.hostname.toLowerCase();
   if (!(host === 'localhost' || host === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(host))) return null;
-  if (u.pathname === '/' || u.pathname === '') u.pathname = '/v1/audio/speech';
+  if (u.pathname === '/' || u.pathname === '') u.pathname = path;
   u.hash = '';
   return u.toString();
 }

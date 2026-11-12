@@ -109,6 +109,12 @@ words without the acting the Fish Audio voices do. If you run a speech server on
 `/v1/audio/speech` request and answers with WAV (Chatterbox and Kokoro servers do), add its address under **Voice server**
 and Roamies speaks through that instead, on any system. Only addresses on your own computer are accepted.</sub>
 
+<sub>Other accents: the built-in listening model was trained mostly on American and European voices. On Windows and
+Linux you can point Roamies at a speech-to-text server on your own computer instead (panel > Voice > **Speech server**);
+[tools/local-speech](tools/local-speech) has one ready to run, with a Whisper model tuned for Singapore English and an
+optional British voice that suits JARVIS. If the server is off, the built-in model takes over by itself. In Singapore
+(by time zone or region) the assistant is also told what speech models tend to mishear there.</sub>
+
 <sub>Spoken replies through Fish Audio are billed to your own Fish Audio account; the panel shows what each voice model costs. Voice on
 Windows and Linux uses [NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3)
 ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), in the ONNX export by
