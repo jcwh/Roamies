@@ -122,9 +122,11 @@
     const s = state.status;
     $('led').className = `led${s.state === 'ready' ? ' on' : s.state === 'busy' ? ' busy' : ''}`;
     const now = $('now');
-    now.replaceChildren(el('b', { textContent: s.text }), state.model ? ` · ${state.model.name}` : s.state === 'off' ? ' · Sign in on the Model page' : '');
+    now.replaceChildren(el('b', { textContent: s.text }), state.model ? ` · ${state.model.name}` : state.private ? ' · No model on this computer yet' : s.state === 'off' ? ' · Sign in on the Model page' : '',
+      state.private ? ' · Private' : '');
     now.title = now.textContent;
-    $('ver').textContent = `v${state.version}`;
+    // Private mode shows on every page, next to the version.
+    $('ver').textContent = `v${state.version}${state.private ? ' · Private' : ''}`;
     updateButton();
     react();
     // The sidebar marks a page that needs you: no account to answer with.
@@ -407,13 +409,28 @@
 
   // Settings, one page per concern.
   function modelPage() {
-    const on = state.providers.filter((p) => p.on);
+    // Private mode offers only the models on this computer.
+    const on = state.providers.filter((p) => p.on && (!state.private || p.id === 'local'));
     const model = state.model ? `${state.model.provider}:${state.model.id}` : '';
+    // Ollama, the AI that runs on this computer: what it has, and a way to look again after starting it or adding a model.
+    const lo = state.local ?? { reachable: false, models: [] };
+    const usable = lo.models.filter((m) => m.tools);
+    const picked = state.model?.provider === 'local' ? lo.models.find((m) => m.id === state.model.id) : null;
+    const k = (n) => (n >= 1024 ? `${Math.round(n / 1024)}k` : String(n));
+    const small = picked?.context && picked.context < 16000;
+    const ollama = el('div', { className: 'setting' },
+      el('span', {}, 'Ollama',
+        el('small', { className: small || (lo.reachable && !usable.length) ? 'late' : null, textContent: !lo.reachable ? 'Not running. Start Ollama, then scan.'
+          : !usable.length ? (lo.models.length ? 'None of its models can use tools. Add one that can, then scan.' : 'No models yet. Add one with “ollama pull”, then scan.')
+          : small ? `${picked.name} has only ${k(picked.context)} of context. Raise Ollama's context length to 32k.`
+          : `${usable.length} model${usable.length === 1 ? '' : 's'} on this computer${picked?.context ? ` · ${k(picked.context)} context` : ''}` })),
+      lo.reachable && usable.length ? el('span', { className: 'links' }, el('span', { className: 'ok' }, el('span', { className: 'led on', 'aria-hidden': 'true' }), 'Running'), link('Scan', () => act('localscan'), { k: 'localscan', aria: 'Look for Ollama models again' }))
+        : link('Scan', () => act('localscan'), { k: 'localscan', aria: 'Look for Ollama models again' }));
     const select = on.length ? el('span', { className: 'px field select' },
       el('select', { 'aria-label': 'Model', 'data-k': 'model', on: { change: (e) => act(`model:${e.target.value}`) } },
         model ? null : el('option', { value: '', textContent: 'Pick a model', disabled: true, selected: true }),
         on.map((p) => el('optgroup', { label: p.label }, p.models.map((m) => el('option', { value: `${p.id}:${m.id}`, textContent: m.name, selected: `${p.id}:${m.id}` === model })))))) : null;
-    const accounts = state.providers.filter((p) => p.on || p.method);
+    const accounts = state.providers.filter((p) => p.id !== 'local' && (p.on || p.method));
     const { box, nav } = paged('accounts', accounts, (p) => el('li', { className: `acct${ui.key === p.id ? ' open' : ''}` },
       el('div', { className: 'setting' },
         el('span', {}, p.label),
@@ -425,8 +442,11 @@
     { label: 'Accounts', pin: accounts.findIndex((p) => p.id === ui.key) });
     return [
       group('Model', 'Which AI answers you.', null,
-        select ?? el('p', { className: 'empty', textContent: 'Sign in to an account below first.' })),
-      el('div', { className: 'group paged' }, el('div', { className: 'ghead' }, el('h2', { textContent: 'Accounts' }), el('p', { textContent: 'Sign in to use their models.' })), box),
+        select ?? el('p', { className: 'empty', textContent: state.private ? 'Start Ollama and add a model first.' : 'Sign in to an account below first.' })),
+      group('On this computer', state.private ? 'Private mode is on. Nothing you ask leaves this computer.' : 'Use AI that runs here, for work that must stay private.', null,
+        toggle('Private mode', 'Local model and voice only. No internet.', state.private, () => act('private'), 'private'),
+        ollama),
+      el('div', { className: 'group paged' }, el('div', { className: 'ghead' }, el('h2', { textContent: 'Accounts' }), el('p', { textContent: state.private ? 'Not used while private mode is on.' : 'Sign in to use their models.' })), box),
       foot(null, nav),
     ];
   }
@@ -778,6 +798,8 @@
         ...['xAI', 'GLM (Z.ai)', 'MiniMax', 'Xiaomi', 'DeepSeek', 'Sakana', 'OpenRouter', 'Hugging Face'].map((label) => ({ id: label.toLowerCase().replace(/\W/g, ''), label, on: false, method: 'key', models: [] })),
       ],
       loggingIn: null,
+      // ?ollama: Ollama running with models. ?private: private mode on (add &noollama for Ollama not started).
+      private: false, local: { reachable: false, models: [] },
       recent: [
         { at: at - 20e3, kind: 'did', text: 'Saved to memory' },
         { at: at - 25e3, kind: 'did', text: 'Searched the web' },
@@ -805,6 +827,20 @@
       intro: false,
     };
     const q = new URLSearchParams(location.search);
+    const localModels = [{ id: 'local/ollama/qwen3.5:9b', name: 'qwen3.5:9b', tools: true, images: true, context: q.has('smallctx') ? 4096 : 32768 }, { id: 'local/ollama/gemma4:12b', name: 'gemma4:12b', tools: true, images: true, context: null }, { id: 'local/ollama/nomic-embed-text', name: 'nomic-embed-text', tools: false, images: false, context: null }];
+    const useLocal = (yes) => {
+      s.providers = s.providers.filter((p) => p.id !== 'local');
+      s.local = yes ? { reachable: true, models: localModels } : { reachable: false, models: [] };
+      if (yes) s.providers.push({ id: 'local', label: 'This PC (Ollama)', on: true, method: null, models: localModels.filter((m) => m.tools).map((m) => ({ id: m.id, name: m.name })) });
+    };
+    const cloudModel = s.model;
+    const goPrivate = (yes) => {
+      s.private = yes;
+      s.model = !yes ? cloudModel : s.local.reachable ? { provider: 'local', id: localModels[0].id, name: localModels[0].name, providerLabel: 'This PC (Ollama)' } : null;
+      s.status = yes && !s.model ? { state: 'off', text: 'Off' } : { state: 'ready', text: 'Ready' };
+    };
+    if (q.has('ollama') || (q.has('private') && !q.has('noollama'))) useLocal(true);
+    if (q.has('private')) goPrivate(true);
     if (q.has('busy')) Object.assign(s, { busy: true, status: { state: 'busy', text: 'Reading notes.md' } });
     if (q.has('empty')) Object.assign(s, { recent: [], facts: [], commitments: [], usage: null });
     if (q.has('many')) {
@@ -830,6 +866,9 @@
       const id = args.msg?.id ?? '';
       if (id.startsWith('size:')) { s.size = id.slice(5); setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
       const again = () => setTimeout(() => window.__panel({ kind: 'state', state: s }), 120);
+      if (id === 'private') { goPrivate(!s.private); again(); }
+      if (id === 'localscan') { useLocal(!q.has('noollama')); if (s.private) goPrivate(true); again(); setTimeout(() => window.__panel({ kind: 'note', text: s.local.reachable ? 'Ollama: 2 models I can use.' : "Ollama isn't running on this computer.", bad: !s.local.reachable }), 300); }
+      if (id.startsWith('model:')) { const [prov, ...rest] = id.slice(6).split(':'); const mid = rest.join(':'); const m = s.providers.find((p) => p.id === prov)?.models.find((x) => x.id === mid); if (m) { s.model = { provider: prov, id: mid, name: m.name, providerLabel: s.providers.find((p) => p.id === prov).label }; again(); } }
       if (id.startsWith('replies:')) { s.replies = id.slice(8); again(); }
       if (id.startsWith('voiceengine:')) { s.voiceEngine = id.slice(12); again(); }
       if (id.startsWith('localvoice:')) { s.localVoice.voice = id.slice(11); again(); }

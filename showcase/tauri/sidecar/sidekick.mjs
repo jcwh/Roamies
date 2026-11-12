@@ -11,6 +11,7 @@ import { agentEvents, stallWatch } from './agentstream.mjs';
 import {
   AUTH_PROVIDERS, AuthStorage, OPENAI_CHATGPT_KEY, apiKeyStorageKeys, claudeCodeEnv, dualAuthProvider, getAuthStorageKeys, getContextWindow, getDefaultModel, getModel,
   getModelsForProvider, loginChatGPT, resolveClaudeCodeBinary, signInWithClaudeCode, storageKeyProvider,
+  clearRuntimeModels, discoverLocalModels, formatLocalModelId, ollamaServedContext, parseLocalModelId, registerRuntimeModels, toModelInfo,
 } from '@kenkaiiii/gg-core';
 import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -35,6 +36,7 @@ import { createSpeaker } from './speaker.mjs';
 import { DEFAULT_VOICE, FISH_CHOICES } from './fish.mjs';
 import { LocalVoice, createSapi, createServerVoice, hasBuiltinVoice, localAddress, voiceForLook } from './localvoice.mjs';
 import { quietWav, speechAddress, transcribeWith, writeSetting } from './ears.mjs';
+import { LOCAL, contextProblem, guardFetch, learnContext, localNote, opensOutside, scanLocal, toolsFor } from './localai.mjs';
 import { createSecrets, retryLoad } from './secrets.mjs';
 import { createActivity } from './activity.mjs';
 import { canCircle, canSnap, hasHands, hasHotkeys, hasVoice, linuxSession, micTrouble, needsVoiceModel, platformLine, samePair, seesPointer, writeChord, writeChords } from './platform.mjs';
@@ -74,10 +76,11 @@ const OAUTH = {
   // The current sign-in's ID token skips OpenAI's account picker.
   openai: async (cb, signal) => { const previous = await auth.getCredentials(OPENAI_CHATGPT_KEY).catch(() => null); return loginChatGPT(cb, { ...(previous ? { previous } : {}), signal }); },
 };
-const PROVIDER_LABELS = Object.fromEntries(AUTH_PROVIDERS.map((p) => [p.value, p.label]));
+const PROVIDER_LABELS = { ...Object.fromEntries(AUTH_PROVIDERS.map((p) => [p.value, p.label])), [LOCAL]: 'This PC (Ollama)' };
 // What a sign-in is called (the product), where the provider's label is the company.
 const SIGNIN_NAMES = { anthropic: 'Claude', openai: 'ChatGPT' };
-const MENU_PROVIDERS = ['anthropic', 'openai', ...AUTH_PROVIDERS.map((p) => p.value)].filter((v, i, a) => a.indexOf(v) === i);
+// Last: a model on this computer (Ollama). It's found by looking, not by signing in (localai.mjs).
+const MENU_PROVIDERS = ['anthropic', 'openai', ...AUTH_PROVIDERS.map((p) => p.value), LOCAL].filter((v, i, a) => a.indexOf(v) === i);
 const FAST = { anthropic: 'claude-haiku-5-5', openai: 'gpt-6-luna', gemini: 'gemini-3.8-flash' };
 
 // ---------- config ----------
@@ -95,6 +98,10 @@ const DEFAULTS = {
   localVoice: '', // a Windows voice by name; '' picks one that suits the look
   localVoiceServer: null, // { url, voice }: a speech server on this computer, used instead of Windows' voices
   speechServer: '', // a speech-to-text server on this computer that reads what was said instead of the built-in model (ears.mjs)
+  // Private mode: only a model on this computer answers, only this computer's voice speaks, and nothing Roamies
+  // does goes to the internet (localai.mjs). cloudModel: what to go back to when it's switched off.
+  privateMode: false, cloudModel: null,
+  localDraw: false, // give a model on this computer the drawing tool too (large; small models misuse it)
 };
 const LINUX = process.platform === 'linux';
 // Linux: "x11" or "wayland" (the app says which). Wayland keeps apps from seeing the pointer over other apps and
@@ -142,6 +149,9 @@ let shellInfo = null; // resolves the shell's reply to it: screens, tray, panel,
   if (saved && typeof saved === 'object' && !Array.isArray(saved)) config = { ...DEFAULTS, ...saved };
 }
 const saveConfig = () => writeJson(CONFIG_PATH, config, { backup: true });
+// Private mode: from here on Roamies' own requests reach only this computer while it's on (the AI and the voice are
+// kept local separately: the guard is for everything else, such as pictures, pages and downloads).
+globalThis.fetch = guardFetch(globalThis.fetch, () => !!config.privateMode);
 
 // ---------- spoken replies (Fish Audio) ----------
 // The key is the user's own: in the Keychain (macOS), DPAPI-encrypted (Windows) or the desktop's keyring (Linux),
@@ -188,6 +198,7 @@ const speech = createSpeaker({
 speech.setVoice(lookVoice());
 speech.setModel(config.fishModel);
 speech.setEngine(['fish', 'local'].includes(config.voiceEngine) ? config.voiceEngine : 'auto');
+speech.setCloud(!config.privateMode);
 // The list of Windows voices picks the look's voice (voiceForLook), so it's fetched once this computer is the one speaking.
 if (WIN_VOICE && config.replies === 'voice' && config.voiceEngine !== 'fish') setTimeout(() => { if (speech.local) loadLocalVoices(); }, 3000);
 // The speech server for listening: the helper reads its address from a file beside the model (ears.mjs), kept in step here.
@@ -251,7 +262,8 @@ const signedIn = new Map();
 // of key (keyCards' ids): Kimi and Xiaomi each take a plan key and a pay-per-token key, saved apart.
 const oauthOn = new Map(), keyOn = new Map(), storedKeys = new Set();
 async function refreshAuth() {
-  for (const p of MENU_PROVIDERS) signedIn.set(p, await auth.hasProviderAuth(p).catch(() => false));
+  for (const p of MENU_PROVIDERS) if (p !== LOCAL) signedIn.set(p, await auth.hasProviderAuth(p).catch(() => false));
+  if (wantsLocal()) await refreshLocal(!localState.reachable); // not found last time: look afresh (it may have just been started)
   for (const p of Object.keys(OAUTH)) {
     oauthOn.set(p, p === 'anthropic' ? await auth.hasClaudeCodeLogin().catch(() => false) : await auth.hasCredentials(dualAuthProvider(p)?.oauthKey ?? p).catch(() => false));
   }
@@ -261,10 +273,59 @@ async function refreshAuth() {
     for (const k of apiKeyStorageKeys(meta.value)) if (await auth.hasCredentials(k).catch(() => false)) storedKeys.add(k); else storedKeys.delete(k);
   }
 }
+// ---------- a model on this computer (Ollama) ----------
+// Looked for when it's wanted (it's the one picked, private mode is on, or the panel is open), not on every request:
+// a computer without Ollama shouldn't wait on it. The engine keeps each look for 30 s.
+let localState = { reachable: false, reason: '', models: [] };
+const localContexts = new Map(); // model → the context window Ollama really gave it, learned by loading it
+const localCore = { clearRuntimeModels, discoverLocalModels, formatLocalModelId, ollamaServedContext, parseLocalModelId, registerRuntimeModels, toModelInfo };
+const LOCAL_KEY = 'local:ollama';
+const wantsLocal = () => !!config.privateMode || config.provider === LOCAL;
+// Ollama's entry in the sign-in file is written when it changes, not on every look.
+let endpointStored = null;
+const localAuth = {
+  setLocalEndpoint: async (id, url) => { if (endpointStored !== true) { await auth.setLocalEndpoint(id, url); endpointStored = true; } },
+  removeLocalEndpoint: async (id) => { if (endpointStored !== false) { await auth.removeLocalEndpoint(id); endpointStored = false; } },
+};
+async function refreshLocal(force = false) {
+  // A Scan starts over: the entry is written again (GG Coder shares the file and may have removed it), and context
+  // sizes are read again (Ollama may have been restarted with another setting).
+  if (force) { endpointStored = null; localContexts.clear(); }
+  localState = await scanLocal({ core: localCore, auth: localAuth, force, known: localContexts });
+  signedIn.set(LOCAL, localState.reachable && localState.models.some((m) => m.tools));
+  if (localState.reachable) storedKeys.add(LOCAL_KEY); else storedKeys.delete(LOCAL_KEY);
+  return localState;
+}
+// The picked local model is loaded and its real context window read, once: Ollama gives a model only a few thousand
+// tokens unless it's told otherwise, and my instructions alone are longer than that. Returns what to say if it can't run.
+async function localReady() {
+  const entry = localState.models.find((m) => m.id === config.model);
+  if (!entry) return `Ollama no longer has ${parseLocalModelId(config.model)?.rawId ?? 'that model'}. Pick another on the Model page in ${PANEL}.`;
+  // Asked again while it was too small: they may have raised it in Ollama since, so look again rather than remember.
+  if (!entry.contextKnown || contextProblem(entry.context)) {
+    if (!entry.contextKnown) say(`Loading ${entry.rawId} on this computer. The first time takes a moment.`, 'happy');
+    const before = entry.context;
+    const served = await learnContext({ core: localCore, state: localState, id: config.model, known: localContexts }).catch(() => undefined);
+    logLine('local_model', { model: entry.rawId, context: served ?? null });
+    if (served && served !== before) agent = null; // how much fits changed
+  }
+  return entry.contextKnown ? contextProblem(entry.context) : null;
+}
+const PRIVATE_NO_MODEL = () => `Private mode is on, so only a model on this computer may answer, and I can't find one: ${localState.reachable ? 'Ollama has no model here that can use tools. Pull one (for example: ollama pull qwen3.5:9b)' : 'Ollama isn\'t running. Start it'}, then ask me again.`;
+
 // Some models run on only one kind of key (Kimi K2.8 Preview on a Kimi Code plan key, MiMo UltraSpeed on API Credits).
 const canRun = (p, id) => !!signedIn.get(p) && getAuthStorageKeys(p, id).some((k) => k === p || storedKeys.has(k));
 const runnable = (p) => getModelsForProvider(p).filter((m) => canRun(p, m.id));
 function ensureModel() {
+  // Private mode, or a model on this computer was the pick: a local model or nothing. It never falls back to a
+  // cloud model by itself (Ollama not started yet must not send the next request to the internet).
+  if (config.privateMode || config.provider === LOCAL) {
+    if (config.provider === LOCAL && getModel(config.model) && canRun(LOCAL, config.model)) return true;
+    const first = runnable(LOCAL)[0];
+    if (!first) return false;
+    config.provider = LOCAL; config.model = first.id; saveConfig();
+    return true;
+  }
   if (config.provider && getModel(config.model) && canRun(config.provider, config.model)) return true;
   const p = ['anthropic', 'openai', 'gemini', ...MENU_PROVIDERS].find((x) => runnable(x).length);
   if (!p) return false;
@@ -293,6 +354,8 @@ const { tools, hands, whereNow, ink, nextTurn } = createTools({
   allowActions: () => config.allowActions, ui, ask, openUrl, userName,
   speak: (line) => { if (!turnVoice) return false; turnVoice.say(line); return true; },
   onHandoff: (task) => { activity.handoff(task); panel(); },
+  // How much of a file one read_file call returns: a model on this computer has a far smaller working memory.
+  readLimit: () => (config.provider === LOCAL ? 24_000 : 60_000),
   commitmentsText: () => [commitmentsText(), doneTodayText() && `Done today:\n${doneTodayText()}`].filter(Boolean).join('\n'),
   onCommitments: (c) => { menu(); scheduleReminders(); showList({ flash: c?.id, seconds: 6 }); },
   showList: () => showList({ seconds: 20 }),
@@ -393,7 +456,7 @@ ${speech.local ? PLAIN_VOICE : ACTED_VOICE}
 Before anything slow (searching the web, fetching or reading a page or file, looking at the screen, acting in an app, running a command), first say one short beat of 2 to 6 words that shows you heard them ("On it, checking Paris."), then call the tool in the same reply, so they're never left in silence. No beat when you answer straight away; never describe your steps; don't repeat the beat after the tool, go straight to the answer. In longer work, one short line before each new stage, not before every call.
 `;
 const stablePrompt = () => `You are ${lookName()}, ${LOOK_BODY[config.look] ?? LOOK_BODY.classic} who lives on ${userName}'s screen as a desktop companion. You live in Roamies, a desktop app by Ken Kai (Mac, Windows and Linux) that puts little companions on your screen; this is Roamies ${VERSION}. Your look (the Appearance page) is also your name and your voice: Roamie, JARVIS, Anime Girl, Sarah or Adrian. If they switch, you're the new one; never call yourself Sidekick.
-About Roamies, for when ${userName} asks about you or the app: ${MAC ? 'it lives in the menu bar at the top of the screen (no Dock icon)' : LINUX ? 'it lives in the system tray (no window of its own); GNOME shows tray icons only with the AppIndicator extension, and opening Roamies again from the app list opens the panel, tray or not' : 'it lives in the system tray at the bottom right of the taskbar (no taskbar button); Windows may tuck the icon behind the ^ arrow next to the clock, and dragging it onto the taskbar keeps it in view'}. ${LINUX ? 'Clicking the tray icon shows a short menu (Open Panel,' : `Clicking the ${MAC ? 'menu bar' : 'tray'} icon opens the Roamies panel; right-clicking it shows a short menu (Open Panel,`} Show ${lookName()}, Ask ${lookName()}…, ${SNAP_OK ? 'Ask About an Area…, ' : ''}Stop, Quit Roamies). The panel has a header (your name, the Roamies version with one update button beside it: Check for Updates, which becomes Update to <version> when one is out and installs it and restarts in one go; By Ken Kai under the name; and Quit at the top right, which asks to confirm) and a sidebar of pages; long lists show a page at a time, with arrows in the page's footer. Home: a list of what you did recently (questions, files read, searches, reminders), today's usage, and buttons for Ask, Show List (reminders and commitments on screen: Today and Later; tick them off there; finished ones clear at midnight)${SNAP_OK ? ', Ask About an Area' : ''}, Stop and New Conversation. Memory: two tabs, What I Remember (everything you remember about them, each with Forget, a search once there's more than a page, and Forget Everything in the footer) and Commitments (their open commitments, Done or Drop), with Get to Know Me at the end of the tab row (a four-question chat so you learn who they are and what they're going for). Then the settings pages: Model (pick the AI provider and model, and sign in to providers), Appearance (Look: ${LOOKS.map(([, label]) => label).join(', ').replace(/, ([^,]*)$/, ' or $1')}, each with its own voice; Size: Default, Small${POINTER_OK ? ' or Cursor, a little arrow pointer' : ''}), Voice (Replies: Text Only, or Voice and Text, which speaks replies out loud; Voice: ${WIN_VOICE ? "This PC, one of Windows' own voices (free, offline, no account, but plain: it can't act), or " : ''}Fish Audio, the character voices with real feeling, which needs their own Fish Audio API key, added right there; Voice Server, the address of a speech server running on their own computer, to speak through that instead; Voice Model, for Fish Audio: Drama 3, the most expressive (acts out feelings, slower, pricier) or S2.1 Pro (a natural, quicker pace with less emotion, cheaper), billed to their own Fish Audio account${VOICE_OK ? `; Voice Control, ${HOTKEYS_OK ? 'hold the talk keys to talk' : 'press the talk shortcut to talk'}` : ''}), Behavior (Sound Effects, Allow File Edits & Commands, ${VOICE_OK ? 'Auto-listen (open the mic when you end on a question), ' : ''}${VOICE_OK && MAC ? 'Wake word (say "Hey Roamies" to start talking hands-free; keeps the mic on), ' : ''}Open at Login), and About (who made Roamies with links, Setup Guide, Show Logs, Save Diagnostics). Updates are signature-checked${LINUX ? '; they install by themselves when Roamies runs as an AppImage; installed from a .deb or .rpm, the update button opens the download page instead' : ''}. When something isn't working (the microphone, voice, the panel, a crash, an error), tell them to use Save Diagnostics (in About, or the tray icon's menu): it saves one .log file in Downloads with the logs, system and microphone details, keys and personal details removed, for them to attach to a GitHub issue at github.com/KenKaiii/Roamies/issues or send to Ken. Sign-in is shared with GG Coder. Downloads and source: github.com/KenKaiii/Roamies. Don't invent features or settings that aren't listed here.
+About Roamies, for when ${userName} asks about you or the app: ${MAC ? 'it lives in the menu bar at the top of the screen (no Dock icon)' : LINUX ? 'it lives in the system tray (no window of its own); GNOME shows tray icons only with the AppIndicator extension, and opening Roamies again from the app list opens the panel, tray or not' : 'it lives in the system tray at the bottom right of the taskbar (no taskbar button); Windows may tuck the icon behind the ^ arrow next to the clock, and dragging it onto the taskbar keeps it in view'}. ${LINUX ? 'Clicking the tray icon shows a short menu (Open Panel,' : `Clicking the ${MAC ? 'menu bar' : 'tray'} icon opens the Roamies panel; right-clicking it shows a short menu (Open Panel,`} Show ${lookName()}, Ask ${lookName()}…, ${SNAP_OK ? 'Ask About an Area…, ' : ''}Stop, Quit Roamies). The panel has a header (your name, the Roamies version with one update button beside it: Check for Updates, which becomes Update to <version> when one is out and installs it and restarts in one go; By Ken Kai under the name; and Quit at the top right, which asks to confirm) and a sidebar of pages; long lists show a page at a time, with arrows in the page's footer. Home: a list of what you did recently (questions, files read, searches, reminders), today's usage, and buttons for Ask, Show List (reminders and commitments on screen: Today and Later; tick them off there; finished ones clear at midnight)${SNAP_OK ? ', Ask About an Area' : ''}, Stop and New Conversation. Memory: two tabs, What I Remember (everything you remember about them, each with Forget, a search once there's more than a page, and Forget Everything in the footer) and Commitments (their open commitments, Done or Drop), with Get to Know Me at the end of the tab row (a four-question chat so you learn who they are and what they're going for). Then the settings pages: Model (pick the AI provider and model, and sign in to providers; On This Computer: models that run on their own computer through Ollama, with Scan to look for them again, and Private Mode, which uses only a local model and the computer's own voice so nothing they ask or show you goes to the internet), Appearance (Look: ${LOOKS.map(([, label]) => label).join(', ').replace(/, ([^,]*)$/, ' or $1')}, each with its own voice; Size: Default, Small${POINTER_OK ? ' or Cursor, a little arrow pointer' : ''}), Voice (Replies: Text Only, or Voice and Text, which speaks replies out loud; Voice: ${WIN_VOICE ? "This PC, one of Windows' own voices (free, offline, no account, but plain: it can't act), or " : ''}Fish Audio, the character voices with real feeling, which needs their own Fish Audio API key, added right there; Voice Server, the address of a speech server running on their own computer, to speak through that instead; Voice Model, for Fish Audio: Drama 3, the most expressive (acts out feelings, slower, pricier) or S2.1 Pro (a natural, quicker pace with less emotion, cheaper), billed to their own Fish Audio account${VOICE_OK ? `; Voice Control, ${HOTKEYS_OK ? 'hold the talk keys to talk' : 'press the talk shortcut to talk'}` : ''}), Behavior (Sound Effects, Allow File Edits & Commands, ${VOICE_OK ? 'Auto-listen (open the mic when you end on a question), ' : ''}${VOICE_OK && MAC ? 'Wake word (say "Hey Roamies" to start talking hands-free; keeps the mic on), ' : ''}Open at Login), and About (who made Roamies with links, Setup Guide, Show Logs, Save Diagnostics). Updates are signature-checked${LINUX ? '; they install by themselves when Roamies runs as an AppImage; installed from a .deb or .rpm, the update button opens the download page instead' : ''}. When something isn't working (the microphone, voice, the panel, a crash, an error), tell them to use Save Diagnostics (in About, or the tray icon's menu): it saves one .log file in Downloads with the logs, system and microphone details, keys and personal details removed, for them to attach to a GitHub issue at github.com/KenKaiii/Roamies/issues or send to Ken. Sign-in is shared with GG Coder. Downloads and source: github.com/KenKaiii/Roamies. Don't invent features or settings that aren't listed here.
 ${replyStyle()}Your body does the acting: to act out a feeling, start your reply with one tag, which is never shown: ${EMOTES.map((e) => `[${e}]`).join(' ')}. hype celebrates a win, upset is for when they're dodging work, remind nudges about something they said they'd do, motivate is a push to start, wave is hello or goodbye. Most replies need no tag.
 Lead with the answer: the fact, number, pick or result they asked for, then only the context that makes it useful, then stop. A count or total gathered over several pages, files or results: note each one's count in a few words as you go ("Page 1: two."), add those up, and check the total you lead with against the items you then name. No opener about checking, looking or searching ("Let me see…", "I found…")${VOICE_ON() ? ', apart from the one short beat before something slow' : ''}.
 After using a tool, never repeat what you already said; only add what's new.
@@ -433,7 +496,9 @@ ${VOICE_OK ? `- Voice: ${!config.voice ? 'off' : voiceReady() ? `on; ${HOTKEYS_O
 ${facts.length ? `What you know about ${userName}${total > facts.length ? ` (${facts.length} most relevant of ${total})` : ''}:\n${facts.map((f) => `- ${f.id}: ${f.text}`).join('\n')}` : `You don't know anything lasting about ${userName} yet.`}`;
   return { turn, memory };
 };
-const system = () => stablePrompt();
+// A model on this computer, and private mode, add a few lines (localai.mjs).
+const modeNow = () => ({ local: config.provider === LOCAL, private: !!config.privateMode, draw: !!config.localDraw });
+const system = () => stablePrompt() + localNote(modeNow());
 const LIVE_OPEN = '<live-state>', LIVE_CLOSE = '</live-state>';
 const stripLive = (text) => (typeof text === 'string' && text.startsWith(LIVE_OPEN) ? text.slice(text.indexOf(LIVE_CLOSE) + LIVE_CLOSE.length).replace(/^\n+/, '') : text);
 // Each request's live block is made once and kept on that message from then on, so earlier messages
@@ -529,7 +594,7 @@ function makeAgent(cc) {
     model: config.model,
     system: system(),
     priorMessages: prior,
-    tools,
+    tools: toolsFor(tools, modeNow()),
     maxTurns: 24,
     transformContext: (msgs, o) => {
       const fitted = fitContext(msgs, { budgetTokens: requestBudget(), force: o?.force });
@@ -710,7 +775,10 @@ async function learnFacts(facts) {
   if (added.length) menu();
   return added;
 }
+// Conversations held in private mode: nothing in them is turned into lasting memory, which a cloud model would see later.
+const privateSessions = new Set();
 async function memoryPass(s, why) {
+  if (config.privateMode || privateSessions.has(s.id)) return [];
   const turns = transcript(s.messages.filter((m) => !isSummary(m)), userName, stripNote);
   if (!turns.trim() || !config.model) return [];
   const t0 = Date.now();
@@ -812,8 +880,14 @@ async function readyAgent() {
   await resumed;
   await fishKeyLoaded;
   await refreshAuth();
-  if (!ensureModel()) return `Sign in to an AI provider first: the Model page in ${PANEL}. Then ask me again!`;
+  if (!ensureModel()) {
+    if (config.privateMode) return PRIVATE_NO_MODEL();
+    if (config.provider === LOCAL) return `I'm set to a model on this computer, and I can't reach it: ${localState.reachable ? 'Ollama has no model here that can use tools' : 'Ollama isn\'t running'}. Start it, or pick another model on the Model page in ${PANEL}.`;
+    return `Sign in to an AI provider first: the Model page in ${PANEL}. Then ask me again!`;
+  }
+  if (config.provider === LOCAL) { const no = await localReady(); if (no) return no; }
   if (!session) { session = newSession(config.provider, config.model); liveBlocks.clear(); agent = null; pruneSessions(); }
+  if (config.privateMode) privateSessions.add(session.id);
   if (agentStale && agent) { agent = null; }
   agentStale = false;
   let cc;
@@ -1087,6 +1161,9 @@ async function apiKeyLogin(id, given) {
 }
 
 function openUrl(url) {
+  // Private mode: nothing is handed to a browser (a link's address can carry what was being worked on). Files,
+  // folders, apps and this computer's own settings pages still open.
+  if (config.privateMode && opensOutside(url)) { console.error('private mode: link not opened'); return; }
   if (process.platform === 'win32') return void winOpen(url);
   const [cmd, args] = process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
   execFile(cmd, args, () => {});
@@ -1134,6 +1211,45 @@ async function removeFishKey() {
   menu();
   if (spoken) speakLine("Fish Audio key removed. I'll use this computer's own voice.");
   else say('Fish Audio key removed. Replies are text only.', 'happy');
+}
+
+// ---------- private mode ----------
+// On: only a model on this computer answers and only this computer's voice speaks; Roamies' own requests, links and
+// network commands are shut off (localai.mjs). Off: back to the model it was on, in a new conversation, so nothing
+// said in private is sent on with the next request.
+let privateSwitching = false;
+async function setPrivate(on) {
+  on = !!on;
+  if (!!config.privateMode === on || privateSwitching) return;
+  privateSwitching = true;
+  try {
+    controller?.abort(); speech.stop();
+    if (on) {
+      if (config.provider && config.provider !== LOCAL) config.cloudModel = { provider: config.provider, model: config.model };
+      config.privateMode = true; saveConfig();
+      speech.setCloud(false);
+      agent = null; agentStale = true;
+      await refreshLocal(true);
+      const ready = ensureModel();
+      menu();
+      const voiceNote = config.replies === 'voice' && !speech.on ? ' Replies are text only while it\'s on: this computer has no voice of its own.' : '';
+      if (ready) speakLine(`Private mode is on. I'm running on ${parseLocalModelId(config.model)?.rawId ?? 'a model on this computer'}, and nothing leaves this computer.${voiceNote}`);
+      else say(`Private mode is on, and nothing leaves this computer. ${localState.reachable ? 'Ollama has no model here that can use tools yet: pull one (for example: ollama pull qwen3.5:9b)' : 'Ollama isn\'t running yet: start it'}, then press Scan on the Model page.${voiceNote}`, 'concerned');
+    } else {
+      // The private conversation ends here (while private mode is still on, so nothing is learned from it).
+      endIntro(); freshSession('private_off');
+      config.privateMode = false;
+      const back = config.cloudModel;
+      if (back && signedIn.get(back.provider) && getModel(back.model) && canRun(back.provider, back.model)) { config.provider = back.provider; config.model = back.model; }
+      else if (config.provider === LOCAL && !signedIn.get(LOCAL)) config.provider = null;
+      saveConfig();
+      speech.setCloud(true);
+      agent = null; agentStale = true;
+      ensureModel(); menu();
+      say(`Private mode is off. I started a new conversation, so nothing from the private one is sent anywhere.${getModel(config.model) ? ` I'm back on ${getModel(config.model).name}.` : ''}`, 'happy');
+    }
+    logLine('private_mode', { on });
+  } finally { privateSwitching = false; }
 }
 
 // ---------- a speech server for listening ----------
@@ -1257,6 +1373,8 @@ function setLogin(on) { login.asked = true; send({ type: 'login_item', on }); }
 // page: this copy can't replace itself (Linux, installed from a .deb or .rpm), so "install" opens the download page.
 const update = { available: null, told: null, manual: false, installing: false, checking: false, result: null, page: false, done: null };
 function checkUpdates(manual = false) {
+  // Private mode: no request leaves this computer, not even to ask whether there's a new version.
+  if (config.privateMode) { if (manual) { update.checking = false; update.result = { ok: false, error: 'Private mode is on. Switch it off on the Model page to check for updates.' }; panel(); } return; }
   update.manual = manual;
   if (manual) { update.checking = true; update.result = null; panel(); }
   send({ type: 'update', install: false });
@@ -1362,7 +1480,7 @@ async function saveDiagnostics() {
       version: VERSION, provider: config.provider, model: config.model, signedIn: [...signedIn].filter(([, on]) => on).map(([p]) => p),
       busy, sidecarUpMinutes: Math.round(process.uptime() / 6) / 10,
       voice: { on: VOICE_OK && config.voice !== false, needsModel: NEEDS_MODEL, model: { status: voiceModel.status, error: voiceModel.error ?? undefined }, hotkeys: HOTKEYS_OK, keys: keys() },
-      replies: config.replies, fishKey: speech.hasKey, voiceEngine: speech.local ? 'local' : 'fish', speechServer: !!speechServer(), hands: hasHands(process.platform, process.env.ROAMIES_HANDS), handsPath: process.env.ROAMIES_HANDS ? 'set' : 'none',
+      replies: config.replies, fishKey: speech.hasKey, voiceEngine: speech.local ? 'local' : 'fish', speechServer: !!speechServer(), privateMode: !!config.privateMode, hands: hasHands(process.platform, process.env.ROAMIES_HANDS), handsPath: process.env.ROAMIES_HANDS ? 'set' : 'none',
       update: { available: update.available, result: update.result }, onboarded: config.onboarded, look: config.look, size: config.size,
     };
     const sections = [
@@ -1447,6 +1565,9 @@ function panelState() {
       };
     }),
     loggingIn,
+    // Private mode, and what Ollama has on this computer (shown on the Model page).
+    private: !!config.privateMode,
+    local: { reachable: localState.reachable, models: localState.models.map((m) => ({ id: m.id, name: m.rawId, tools: m.tools, images: m.images, context: m.contextKnown ? m.context : null })) },
     recent: activity.recent,
     usage: usageToday.requests ? { requests: usageToday.requests, tokens: usageToday.tokens } : null,
     facts: listFacts().slice().reverse().map((f) => ({ id: f.id, text: f.text })),
@@ -1488,6 +1609,7 @@ function modelUpdate(force) {
 }
 async function getVoiceModel() {
   if (!NEEDS_MODEL || voiceReady() || voiceModel.status === 'downloading') return;
+  if (config.privateMode) { if (!onboarding) say('My listening model has to be downloaded once, and private mode is on. Switch private mode off on the Model page, let it download, then switch it back on.', 'concerned'); return; }
   Object.assign(voiceModel, { status: 'downloading', error: null });
   logLine('voice_model', { phase: 'start', dir: MODEL_DIR });
   modelUpdate(true);
@@ -1617,9 +1739,11 @@ async function onMenu(id) {
   }
   else if (id.startsWith('model:')) {
     const [, p, ...rest] = id.split(':');
+    if (config.privateMode && p !== LOCAL) return say('Private mode is on, so only a model on this computer can be picked. Switch private mode off on the Model page first.', 'concerned');
     config.provider = p; config.model = rest.join(':'); agent = null; saveConfig(); menu();
     say(`Switched to ${getModel(config.model)?.name ?? config.model}.`, 'happy');
-  } else if (id.startsWith('login:')) oauthLogin(id.slice(6));
+  } else if ((id.startsWith('login:') || id.startsWith('key:')) && config.privateMode) say('Signing in needs the internet. Switch private mode off on the Model page first.', 'concerned');
+  else if (id.startsWith('login:')) oauthLogin(id.slice(6));
   else if (id.startsWith('key:')) apiKeyLogin(id.slice(4));
   else if (id.startsWith('size:') && SIZES.some(([s]) => s === id.slice(5))) { config.size = id.slice(5); saveConfig(); ui({ kind: 'size', size: config.size }); menu(); }
   else if (id.startsWith('look:')) setLook(id.slice(5));
@@ -1633,6 +1757,8 @@ async function onMenu(id) {
   else if (id === 'voiceengine:local' || id === 'voiceengine:fish') setVoiceEngine(id.slice(12));
   else if (id.startsWith('localvoice:')) setLocalVoice(id.slice(11));
   else if (id === 'localserver_remove') setVoiceServer(null, panelNote);
+  else if (id === 'private') setPrivate(!config.privateMode).catch((e) => console.error('private mode', e));
+  else if (id === 'localscan') { await refreshLocal(true); ensureModel(); menu(); panelNote(localState.reachable ? `Ollama: ${localState.models.filter((m) => m.tools).length} model${localState.models.filter((m) => m.tools).length === 1 ? '' : 's'} I can use.` : 'Ollama isn\'t running on this computer.', !localState.reachable); }
   else if (id === 'speechserver_remove') setSpeechServer(null, panelNote).catch((e) => console.error('speech server', e));
   else if (id === 'sound') { config.sound = !config.sound; saveConfig(); ui({ kind: 'sound', on: config.sound }); voiceConfig(); menu(); }
   else if (id === 'actions') {
@@ -1882,9 +2008,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   let m;
   try { m = JSON.parse(line); } catch { return; }
   if (m.type === 'menu') onMenu(m.id).catch((e) => console.error('menu', e));
-  else if (m.type === 'panel_open') { panelOpen = true; panelAt = Date.now(); logLine('panel_open', {}); if (!localVoices.length) loadLocalVoices(); refreshAuth().catch(() => {}).finally(() => panel()); }
+  else if (m.type === 'panel_open') { panelOpen = true; panelAt = Date.now(); logLine('panel_open', {}); if (!localVoices.length) loadLocalVoices(); refreshAuth().catch(() => {}).finally(() => { panel(); refreshLocal().then(() => { ensureModel(); panel(); }).catch(() => {}); }); }
   else if (m.type === 'diagnostics') { shellInfo?.(m); shellInfo = null; }
   else if (m.type === 'panel_closed') { panelOpen = false; logLine('panel_closed', { why: String(m.why ?? ''), ms: Date.now() - panelAt }); }
+  else if ((m.type === 'panel_key' || m.type === 'panel_fishkey') && config.privateMode) panelNote('Private mode is on. Switch it off on the Model page to add a key.', true);
   else if (m.type === 'panel_key' && typeof m.provider === 'string' && typeof m.key === 'string') {
     const id = typeof m.kind === 'string' ? m.kind : m.provider;
     const label = PROVIDER_LABELS[m.provider] ?? m.provider;
@@ -1996,8 +2123,9 @@ logLine('start', { version: VERSION, platform: process.platform, ...(LINUX ? { s
 pruneLogs(); pruneUsage();
 midnightClean();
 // Look for updates shortly after launch, then every 6 hours.
-setTimeout(() => checkUpdates(), 20_000);
-setInterval(() => checkUpdates(), 6 * 3600_000);
+// Private mode: no check (it asks GitHub for the newest version); the Check for Updates button says why.
+setTimeout(() => { if (!config.privateMode) checkUpdates(); }, 20_000);
+setInterval(() => { if (!config.privateMode) checkUpdates(); }, 6 * 3600_000);
 voiceConfig();
 // First run (or setup never finished): open the guide.
 // v2 added the "Control apps" (Accessibility) permission: people who finished setup before that

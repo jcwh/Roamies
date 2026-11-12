@@ -10,6 +10,7 @@ data Roamies handles and where it goes.
 - The developer runs no servers and collects nothing from you.
 - There is no analytics or telemetry.
 - Data leaves your computer only to services you choose to use, listed below.
+- With **Private mode** on, Roamies uses none of them: see [Private mode](#private-mode).
 
 ## What leaves your computer, and where it goes
 
@@ -37,6 +38,28 @@ that address on your own computer and nowhere else; without one it is read by th
 request a browser would send.
 
 Each provider's own privacy policy applies to what is sent to it.
+
+**A model on your own computer** (panel > Model > On this computer; it runs in [Ollama](https://ollama.com)) receives
+the same things as a cloud provider would, at an address on your computer (`127.0.0.1`). Nothing is sent further by
+Roamies; Ollama's own "cloud" models are never offered.
+
+## Private mode
+
+Private mode (panel > Model > On this computer) is for work that must not leave the computer. While it's on:
+
+- only a model on this computer answers, and Roamies never falls back to a cloud provider;
+- replies are spoken only by this computer's voice; Fish Audio is not used;
+- every web request Roamies' own code makes is refused unless it goes to this computer, so none of the services
+  listed above is contacted: no update check, no photo or icon fetch, no speech model download, no sign-in;
+- the assistant has no web fetching, opens no links, shows no cards that load pictures, and commands that reach
+  the network are refused before they run;
+- nothing from the conversation is sent anywhere to build memory, and switching private mode off starts a new
+  conversation, so a private one is never sent on to a cloud provider afterwards.
+
+Its limits, plainly: it governs what Roamies does and is not a firewall for the computer; the check on commands
+reads the command and can't see inside a program the command starts; and if you ask Roamies to type or click in
+another app (a browser, a mail app), that app does what it normally does. [LOCAL-AI.md](LOCAL-AI.md) has the full
+list. Memory, reminders and the conversation are still stored on your computer as described below.
 
 ## Speech, microphone and screen
 

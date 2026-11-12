@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { parseSipsSize, readProblem, rematch, sameBounds, shotFits, shotMap, shotProblem, snapRect, toScreen } from './pointing.mjs';
 import { ASK, BLOCK, checkDrawAction, checkOpen, checkRead, checkUrl, checkWrite, classifyCommand, isPrivateAddress, isRiskyClick, isYes, riskyKind } from './safety.mjs';
 import dns from 'node:dns/promises';
+import { isDocument, part, readDocument } from './docs.mjs';
 import { CARDS, DrawArgs, LIMITS, checkDraw, createParts, createPhotos, describeParts, faviconFor, pickTextMatch, quizNote, resolveTargets } from './draw.mjs';
 import { plain } from './intro.mjs';
 import { linuxSession, seesPointer } from './platform.mjs';
@@ -211,7 +212,7 @@ export const copyText = (text, askShell) => (LINUX ? askShell({ type: 'clipboard
 }));
 
 // askShell: Linux asks the app itself for screenshots and copying ({type:'screenshot'|'clipboard', …} → its answer).
-export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, fmtWhen, commitmentsText, userName, onPlan = () => {}, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }) }) {
+export function createTools({ allowActions, ui, ask, openUrl, onCommitments, showList, fmtWhen, commitmentsText, userName, onPlan = () => {}, readLimit = () => 60_000, speak = () => false, onHandoff = () => {}, watchClicks = () => {}, onInkGone = () => {}, askShell = async () => ({ ok: false, error: 'Roamies isn\'t running.' }) }) {
   let axNudged = 0;
   let lastShot = null; // how the latest screenshot's pixels map to screen points (see pointing.mjs)
   let lastRead = null; // { win, controls } from the latest read_window, to catch ids that went stale
@@ -835,9 +836,12 @@ A drawing stays until the user clears it or the window changes; your next drawin
       },
     },
     {
-      name: 'read_file', description: 'Read a text file. Paths may start with ~. Files with passwords or keys (.ssh, .env, auth.json, keychains) are off limits.',
-      parameters: z.object({ path: z.string() }),
-      execute: async ({ path: p }) => clip(await fs.readFile(allowed(checkRead(p, HOME)), 'utf8'), 60_000),
+      name: 'read_file', description: 'Read a file as text: plain text and code, and documents (Word .docx, PowerPoint .pptx, Excel .xlsx, PDF), all read on this computer. A long file comes in parts: the last line of a part says how to get the next one (from). Paths may start with ~. Files with passwords or keys (.ssh, .env, auth.json, keychains) are off limits.',
+      parameters: z.object({ path: z.string(), from: z.number().int().optional().describe('Where to start, in characters: only for the next part of a long file, with the number the last part gave.') }),
+      execute: async ({ path: p, from }) => {
+        const file = allowed(checkRead(p, HOME));
+        return part(isDocument(file) ? await readDocument(file) : await fs.readFile(file, 'utf8'), from ?? 0, readLimit());
+      },
     },
     {
       name: 'list_files', description: 'List the files and folders in a directory.',

@@ -72,6 +72,9 @@ quizzes you answer with a click.
 
 - **The Roamies panel:** click the menu bar or tray icon (on Linux, **Open Panel** in its menu) for what it's doing, what it remembers, and every setting.
 - **Safe by default:** file edits, commands and app control stay off until you turn them on, and risky steps always ask.
+- **Local AI and private mode:** answer with a model on your own computer through [Ollama](https://ollama.com), and
+  switch **Private mode** on so nothing you ask, show or open goes to the internet. It reads Word, Excel, PowerPoint
+  and PDF files on the computer itself. [LOCAL-AI.md](LOCAL-AI.md) has the setup and what private mode does and doesn't cover.
 - **Shows its work:** every tool plays its own animation, so you can see what it's doing.
 - **Where keys live:** your Fish Audio key stays in the macOS Keychain (encrypted with Windows DPAPI on Windows, in your desktop's keyring on Linux). AI sign-ins are stored in `~/.gg/auth.json`, shared with GG Coder.
 - **Out of the way:** no Dock or taskbar button, a shortcut shows or hides it (see the table), Esc stops a reply.
@@ -199,7 +202,8 @@ On X11 sessions the shortcuts work as on Windows (hold Ctrl+Alt to talk, Ctrl+Al
 ## Privacy
 
 Roamies has no analytics, and nothing is collected by the developer. Your messages, and screenshots when you ask
-about the screen, go to the AI provider you pick. [PRIVACY.md](PRIVACY.md) lists what's sent where.
+about the screen, go to the AI provider you pick. [PRIVACY.md](PRIVACY.md) lists what's sent where. With a model on your
+own computer and **Private mode** on, they go nowhere: see [LOCAL-AI.md](LOCAL-AI.md).
 
 ## Uninstall
 

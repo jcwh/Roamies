@@ -74,3 +74,15 @@ assert.match(side, /act on what they most likely meant\. \$\{SINGAPORE\(\) \? SI
 assert.match(side, /const SINGLISH = `They're in Singapore and speak Singapore English, which the speech model often mishears/);
 assert.match(side, /const SINGAPORE = \(\) => \(typeof config\.singlish === 'boolean' \? config\.singlish : TZ === 'Asia\/Singapore'/, 'on by time zone or region, or by the setting');
 console.log('prompt: JARVIS manner and the Singapore English note');
+// Private mode is wired in sidekick.mjs, which can't be loaded in a test (it starts the app). These hold the lines that
+// keep a private session on this computer: the fetch guard, the tool filter, no memory pass, no cloud fallback, no links.
+assert.match(side, /globalThis\.fetch = guardFetch\(globalThis\.fetch, \(\) => !!config\.privateMode\);/, 'every request from the sidecar passes the private-mode guard');
+assert.match(side, /speech\.setCloud\(!config\.privateMode\);/, 'the cloud voice is off from the start when private mode was left on');
+assert.match(side, /tools: toolsFor\(tools, modeNow\(\)\)/, 'the agent gets the tools private mode allows');
+assert.match(side, /const system = \(\) => stablePrompt\(\) \+ localNote\(modeNow\(\)\);/, 'the model is told it is local and private');
+assert.match(side, /if \(config\.privateMode \|\| privateSessions\.has\(s\.id\)\) return \[\];/, 'a private conversation is never sent to a cloud model for memory');
+assert.match(side, /if \(config\.privateMode \|\| config\.provider === LOCAL\) \{/, 'a local or private pick never falls back to a cloud model');
+assert.match(side, /if \(config\.privateMode && opensOutside\(url\)\) \{/, 'no link is opened in private mode');
+assert.match(side, /if \(config\.privateMode && p !== LOCAL\) return say\(/, 'a cloud model cannot be picked in private mode');
+assert.match(side, /setTimeout\(\(\) => \{ if \(!config\.privateMode\) checkUpdates\(\); \}/, 'no automatic update check in private mode');
+console.log('prompt: private mode wiring');

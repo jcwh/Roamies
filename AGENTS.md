@@ -36,6 +36,13 @@ Listening can go to a speech-to-text server on the same computer (`voice-win/src
 `rustc --test remote.rs` runs its tests anywhere; the sidecar's side is `ears.mjs`): the finished take is sent there and
 Parakeet reads it if that fails. `tools/local-speech` is such a server (Python; `ROAMIES_SPEECH_FAKE=1` runs it without models).
 
+A model on the same computer can answer instead of a cloud provider, and private mode keeps everything there
+(`sidecar/localai.mjs`: Ollama's models through gg-core's local-model support, the context check, and the guards on
+fetch, tools, links and commands; `sidekick.mjs` wires them, and `test/prompt.test.mjs` pins that wiring). Anything new
+that reaches the network must go through `fetch` (guarded) or be switched off while `config.privateMode` is set; the
+overlay loads card pictures itself, which is why `draw` is dropped in private mode. `sidecar/docs.mjs` lets `read_file`
+open Word, PowerPoint, Excel and PDF files. User guide: `LOCAL-AI.md`.
+
 A fork can build the Windows installer with no signing keys: `.github/workflows/windows-installer.yml`.
 
 Releases: push a `v*` tag (or run `.github/workflows/release.yml` by hand). It builds a signed, notarized

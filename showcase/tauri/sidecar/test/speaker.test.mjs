@@ -289,5 +289,23 @@ console.log('bundled beats: passed');
     localMade[1].onError(Object.assign(new Error('gone'), { heard: true }));
     assert.equal(problems.length, 1); assert.deepEqual(out.at(-1), { kind: 'speech', id: r2.id, end: true });
   }
+  { // Private mode: Fish Audio is never contacted. This computer's voice speaks if it has one; otherwise replies are text.
+    let checks = 0;
+    made.length = 0; localMade.length = 0;
+    const can = { on: true };
+    const sp = createSpeaker({ emit: () => {}, FishVoiceImpl: FakeVoice, account: async () => { checks++; return { ok: true, credit: 5 }; }, beatPhrases: ['One sec.'], bundled: () => null,
+      local: { available: () => can.on, make: (on) => new FakeLocal(on) } });
+    sp.setEngine('fish'); sp.setCloud(false);
+    sp.setKey('k'); await tick();
+    assert.equal(checks, 0, 'no account check'); assert.equal(made.length, 0, 'no beats made');
+    assert.equal(sp.cloud, false); assert.equal(sp.local, true, "this computer's voice, though Fish Audio was the pick");
+    sp.start(); assert.equal(localMade.length, 1); assert.equal(made.length, 0);
+    assert.deepEqual(await sp.check(), { ok: false, reason: 'private' });
+    can.on = false; // no voice of its own (not Windows, no voice server)
+    assert.equal(sp.on, false); assert.equal(sp.start(), null, 'text only, rather than Fish Audio');
+    sp.setCloud(true); await tick();
+    assert.equal(checks, 1, 'allowed again: the account is checked'); assert.equal(sp.on, true);
+    assert.ok(sp.start()); assert.ok(made.length >= 1, 'Fish Audio speaks again');
+  }
   console.log('local voice in the speaker: passed');
 }

@@ -48,7 +48,9 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
   let key = null, voice = DEFAULT_VOICE, pref = FISH_MODELS[0], model = pref, seq = 0, current = null, checking = null;
   // Which voice speaks: 'auto' is Fish Audio when there's a key and this computer's voice when there isn't.
   let engine = 'auto';
-  const useLocal = () => !!local?.available() && (engine === 'local' || (engine === 'auto' && !key));
+  // Private mode: Fish Audio is never contacted (no account check, no beats made, no replies), whatever is picked.
+  let cloud = true;
+  const useLocal = () => !!local?.available() && (engine === 'local' || !cloud || (engine === 'auto' && !key));
   // The pick and the cheaper ones after it (FISH_MODELS runs from priciest to free).
   const chain = () => FISH_MODELS.slice(Math.max(0, FISH_MODELS.indexOf(pref)));
   let beats = new Map(), recent = [], warming = null; // phrase → [base64 PCM chunks], for the current key and voice
@@ -66,6 +68,7 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
   // Make the beats once, one at a time (well under Fish's concurrency limit). Failures just leave a gap:
   // that beat is then spoken live instead.
   function warm() {
+    if (!cloud) return Promise.resolve();
     const k = key, vo = voice;
     warming ??= (async () => {
       for (const phrase of beatPhrases) {
@@ -85,6 +88,7 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
   // Returns the account check: { ok, credit } or { ok: false, reason: 'key' | 'network' }.
   async function check() {
     if (!key) return { ok: false, reason: 'key' };
+    if (!cloud) return { ok: false, reason: 'private' };
     checking ??= account(key).then((a) => {
       // No credit: the free tier. Credit again: back to the best model, else keep the paid one that worked.
       if (a.ok) model = a.credit != null && a.credit <= 0.01 ? FREE_MODEL : model === FREE_MODEL ? pref : model;
@@ -141,7 +145,7 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
   /** A new reply's voice, its socket opening now. say(sentence) as they come, then end(). */
   function start() {
     if (useLocal()) return startLocal();
-    if (!key) return null;
+    if (!key || !cloud) return null;
     stopAll();
     const id = `s${++seq}`, said = [];
     let ended = false, tries = 0, v = null, heard = false, done = false, beat = false, t0 = Date.now();
@@ -226,7 +230,10 @@ export function createSpeaker({ emit, onProblem = () => {}, log = () => {}, Fish
     /** Whether the next reply is spoken by this computer's own voice. */
     get local() { return useLocal(); },
     get hasKey() { return !!key; },
-    get on() { return useLocal() || !!key; },
+    /** false: nothing may go to Fish Audio (private mode). The key is kept for when it's allowed again. */
+    setCloud(v) { if (!!v !== cloud) { cloud = !!v; stopAll(); if (cloud && key) check(); } },
+    get cloud() { return cloud; },
+    get on() { return useLocal() || (cloud && !!key); },
     check,
     start,
     stop: stopAll,
